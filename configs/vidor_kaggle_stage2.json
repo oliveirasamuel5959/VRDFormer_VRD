@@ -1,0 +1,22 @@
+{
+    "dataset": "vidor",
+    "vidor_path": "data/vidor",
+    "pretrain": "data/ckpts/vidor_stage1/checkpoint0004.pth",
+    "output_dir": "data/ckpts/vidor_stage2",
+    "epochs": 2,
+    "lr_drop": 1,
+    "num_workers": 2,
+    "max_duration": 24,
+    "seq_len": 8,
+    "cautious": true,
+    "by_ratio": false,
+    "stage": 2,
+    "multi_frame_attention": false,
+    "multi_frame_encoding": false,
+    "merge_frame_features": false,
+    "multi_frame_attention_separate_encoder": false,
+    "position_embedding": "sine_3d_v2",
+    "num_feature_levels": 1,
+    "focal_loss": true,
+    "batch_size": 1
+}
