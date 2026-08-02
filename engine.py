@@ -38,8 +38,8 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
     optimizer.zero_grad()
     
     for i, (samples, targets) in enumerate(metric_logger.log_every(data_loader, epoch, batch_size=args.batch_size*args.accumulate_steps)):
-        if args.debug:
-            debug_and_vis(args.datasets, samples, targets, i) 
+        # if args.debug:
+        #     debug_and_vis(args.datasets, samples, targets, i) 
         
         if not isinstance(samples, NestedTensor):
             samples = NestedTensor.from_tensor_list(samples)  
@@ -122,8 +122,8 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
     
     optimizer.zero_grad()
     for i, (samples, targets) in enumerate(metric_logger.log_every(data_loader, epoch, batch_size=args.batch_size*args.accumulate_steps)):
-        if args.debug:
-            debug_and_vis(args.datasets, samples, targets, i) 
+        # if args.debug:
+        #     debug_and_vis(args.datasets, samples, targets, i) 
         
         samples = samples.to(device)  # bs,3,h,w
         targets = [target_to_cuda(t) for t in targets]
