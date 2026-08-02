@@ -190,9 +190,10 @@ def main(args):
     data_loader_train, sampler_train, data_loader_val = dataloader_initializer(args)
     
     if args.eval:
+        assert args.stage == 2, "Eval mode is only supported for stage 2"
         test_stats = eval_one_epoch(model, data_loader_val, device, 0, args)
         print(test_stats)
-        return 
+        return
     
     print("Start training")
     start_time = time.time()
@@ -221,8 +222,9 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
         
-        test_stats = eval_one_epoch(model, data_loader_val, device, epoch, args)
-        print(test_stats)
+        if args.stage == 2:
+            test_stats = eval_one_epoch(model, data_loader_val, device, epoch, args)
+            print(test_stats)
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      'epoch': epoch,
                      'n_parameters': n_parameters}
