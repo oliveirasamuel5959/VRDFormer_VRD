@@ -54,10 +54,14 @@ class TrackingBase(nn.Module):
             num_prev_target_ind_for_fps = 1
         
         for i, (target, prev_ind) in enumerate(zip(targets, prev_indices)):
-            prev_out_ind, prev_target_ind = prev_ind
-            
+            # the matcher solves the assignment with scipy on a .cpu() cost matrix, so
+            # its indices always come back on the CPU. Everything they are mixed with
+            # below (targets, prev_out) lives on `device`, so move them up front.
+            prev_out_ind, prev_target_ind = [ind.to(device) for ind in prev_ind]
+
             # random subset of positive target pairs
             if self._track_query_false_negative_prob:
+                # CPU index tensor into a CUDA tensor is fine (torch copies it over)
                 random_subset_mask = torch.randperm(len(prev_target_ind))[:num_prev_target_ind]
                 prev_out_ind = prev_out_ind[random_subset_mask]
                 prev_target_ind = prev_target_ind[random_subset_mask]
@@ -83,15 +87,17 @@ class TrackingBase(nn.Module):
                 prev_obj_boxes_matched = prev_out['pred_obj_boxes'][i, prev_out_ind[target_ind_matching]]
                 assert prev_sub_boxes_matched.shape[1] == 4
                 
-                not_prev_out_ind = torch.arange(prev_out['pred_sub_boxes'].shape[1])
-                not_prev_out_ind = [ ind.item() for ind in not_prev_out_ind
-                                         if ind not in prev_out_ind]
-                
+                # plain python ints: `ind not in prev_out_ind` on a CUDA tensor would
+                # both fail the device check and force one host sync per query.
+                prev_out_ind_set = set(prev_out_ind.tolist())
+                not_prev_out_ind = [ind for ind in range(prev_out['pred_sub_boxes'].shape[1])
+                                        if ind not in prev_out_ind_set]
+
                 random_false_out_ind = []
-                
+
                 prev_target_ind_for_fps = torch.randperm(num_prev_target_ind)[:num_prev_target_ind_for_fps]
-                
-                for j in prev_target_ind_for_fps: 
+
+                for j in prev_target_ind_for_fps.tolist():
                     # if random.uniform(0, 1) < self._track_query_false_positive_prob:
                     prev_sub_boxes_unmatched = prev_out['pred_sub_boxes'][i, not_prev_out_ind]
                     prev_obj_boxes_unmatched = prev_out['pred_obj_boxes'][i, not_prev_out_ind]
@@ -112,11 +118,15 @@ class TrackingBase(nn.Module):
                         random_false_out_idx = not_prev_out_ind.pop(
                             torch.multinomial(box_weights.cpu(), 1).item())
                     else:
-                        random_false_out_idx = not_prev_out_ind.pop(torch.randperm(len(not_prev_out_ind))[0])
-                    
+                        random_false_out_idx = not_prev_out_ind.pop(
+                            torch.randperm(len(not_prev_out_ind))[0].item())
+
                     random_false_out_ind.append(random_false_out_idx)
-                
-                prev_out_ind = torch.tensor(prev_out_ind.tolist() + random_false_out_ind).long()
+
+                prev_out_ind = torch.cat([
+                    prev_out_ind,
+                    torch.as_tensor(random_false_out_ind, dtype=torch.long, device=device)
+                ])
                 target_ind_matching = torch.cat([
                     target_ind_matching,
                     torch.tensor([False, ] * len(random_false_out_ind)).bool().to(device)

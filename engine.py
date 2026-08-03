@@ -139,24 +139,7 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
         # to pass it through as torch.nn.parallel.DistributedDataParallel only
         # passes copies
         
-        
-        # Check all tensors in the pipeline
-        def check_device(obj, name="", depth=0):
-            if isinstance(obj, torch.Tensor):
-                if not obj.is_cuda:
-                    print(f"CPU TENSOR: {name} shape={obj.shape}")
-            elif isinstance(obj, dict):
-                for k, v in obj.items():
-                    check_device(v, f"{name}.{k}", depth+1)
-            elif isinstance(obj, (list, tuple)):
-                for i, v in enumerate(obj):
-                    check_device(v, f"{name}[{i}]", depth+1)
 
-        for i, t in enumerate(targets):
-            check_device(t, f"targets[{i}]")
-            check_device(samples.tensors, f"samples.tensors")
-            check_device(samples.mask, f"samples.mask")
-        
         outputs, targets, *_ = model(samples, targets)
         #import pdb;pdb.set_trace()
         loss_dict = criterion(outputs, targets)

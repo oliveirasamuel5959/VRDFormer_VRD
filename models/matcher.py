@@ -145,19 +145,28 @@ class HungarianMatcher(nn.Module):
         for i, target in enumerate(targets):
             if 'track_query_match_ids' not in target:
                 continue
+            # cost_matrix lives on the CPU, while the track-query bookkeeping written by
+            # add_track_queries_to_targets lives on the model device. Pull it over once as
+            # python lists: indexing a CPU tensor with a CUDA scalar is an error, and
+            # doing it per query would also mean thousands of host syncs.
+            fal_pos_mask = target['track_queries_fal_pos_mask'].tolist()
+            queries_mask = target['track_queries_mask'].tolist()
+            track_query_match_ids = target['track_query_match_ids'].tolist()
+            tgt_offset = sum(sizes[:i])
+
             prop_i = 0
-            for j in range(cost_matrix.shape[1]): 
-                if target['track_queries_fal_pos_mask'][j]:
+            for j in range(cost_matrix.shape[1]):
+                if fal_pos_mask[j]:
                     # false positive and palceholder track queries should not
                     # be matched to any target
                     cost_matrix[i, j] = np.inf
-                elif target['track_queries_mask'][j]:
-                    track_query_id = target['track_query_match_ids'][prop_i]
+                elif queries_mask[j]:
+                    track_query_id = track_query_match_ids[prop_i]
                     prop_i += 1
 
                     cost_matrix[i, j] = np.inf
-                    cost_matrix[i, :, track_query_id + sum(sizes[:i])] = np.inf
-                    cost_matrix[i, j, track_query_id + sum(sizes[:i])] = -1
+                    cost_matrix[i, :, track_query_id + tgt_offset] = np.inf
+                    cost_matrix[i, j, track_query_id + tgt_offset] = -1
         
         # cost_matric: bs,num_query,tgt_size
         indices = [linear_sum_assignment(c[i]) for i, c in enumerate(cost_matrix.split(sizes, -1))]  # bsz,200, [sizes] -> [query_id] [pair target id]
