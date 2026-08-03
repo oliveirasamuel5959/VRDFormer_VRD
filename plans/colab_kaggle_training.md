@@ -143,6 +143,49 @@ All new files + bug fixes committed and pushed to the GitHub fork so Colab can c
 | Stage 2 training (2 epochs, batch=1) | 1–2 hours | ~10–12 GB |
 | Evaluation | ~20 min | ~8 GB |
 
+## Updating the Kaggle Dataset (e.g. regenerated PKL)
+
+When `data/metadata/vidor_annotations.pkl` is regenerated via `prepare.py`, push a new version of the Kaggle dataset:
+
+### Option A — Kaggle Web UI (fastest, 30s)
+
+1. Go to your dataset page: `https://www.kaggle.com/datasets/samuelpatricio/vrdformer-vidor-training`
+2. Click **New Version**
+3. Delete the old `metadata/vidor_annotations.pkl` and drag in the new one
+4. Version note: `"Regenerated vidor_annotations.pkl with updated prepare.py"`
+5. Click **Create Version**
+
+### Option B — Kaggle CLI (scriptable)
+
+First-time setup:
+```bash
+sudo apt install python3-pip -y
+pip install kaggle
+# kaggle.json API key already at ~/.kaggle/kaggle.json
+```
+
+Then push the update:
+```bash
+mkdir -p /tmp/kaggle_update/metadata
+cp data/metadata/vidor_annotations.pkl /tmp/kaggle_update/metadata/
+cat > /tmp/kaggle_update/dataset-metadata.json << 'EOF'
+{"title": "VRDFormer-VidOR-Training", "id": "samuelpatricio/vrdformer-vidor-training", "licenses": [{"name": "CC0-1.0"}]}
+EOF
+kaggle datasets version -p /tmp/kaggle_update -m "Update vidor_annotations.pkl"
+```
+
+### Option C — Download, merge, re-upload
+
+If you need to update multiple files while preserving others:
+```bash
+kaggle datasets download samuelpatricio/vrdformer-vidor-training -p /tmp/kaggle_full/
+unzip /tmp/kaggle_full/vrdformer-vidor-training.zip -d /tmp/kaggle_full/
+cp data/metadata/vidor_annotations.pkl /tmp/kaggle_full/metadata/
+kaggle datasets version -p /tmp/kaggle_full -m "Update metadata PKL"
+```
+
+Last PKL generated: 2026-08-03 (88 KB, from `data/prepare.py --func get_anno --dbname vidor`)
+
 ## Verification
 
 1. New configs are valid JSON
