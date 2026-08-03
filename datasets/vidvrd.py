@@ -31,7 +31,8 @@ class VidVRD(VRDBase):
                          stage, prev_frame, prev_frame_range, prev_frame_rnd_augs, prev_prev_frame, debug)
 
     def _check_anno(self, anno):
-        assert 'version' not in anno
+        if 'version' in anno:
+            raise ValueError(f"unexpected 'version' field (video_id={anno.get('video_id', 'N/A')})")
         return anno
 
     def fid2int(self, frame_ids):

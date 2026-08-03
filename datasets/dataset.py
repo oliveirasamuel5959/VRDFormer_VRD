@@ -250,11 +250,18 @@ class VRDBase(Dataset):
         anno_files = self.get_anno_files(split)
 
         annos = dict()
+        failed = 0
         for path in tqdm(anno_files):
-            with open(path, 'r') as fin:
-                anno = json.load(fin)
-                anno = self._check_anno(anno)
-            annos[anno['video_id']] = anno
+            try:
+                with open(path, 'r') as fin:
+                    anno = json.load(fin)
+                    anno = self._check_anno(anno)
+                annos[anno['video_id']] = anno
+            except Exception as e:
+                failed += 1
+                print(f'[warn] skipping {path}: {e}')
+        if failed:
+            print(f'[warn] skipped {failed} annotation file(s)')
         for vid, anno in annos.items():
             self.split_index[split].append(vid)
             for obj in anno['subject/objects']:

@@ -33,7 +33,10 @@ class VidOR(VRDBase):
                          stage, prev_frame, prev_frame_range, prev_frame_rnd_augs, prev_prev_frame, debug)
 
     def _check_anno(self, anno):
-        assert 'version' in anno and anno['version']=='VERSION 1.0'
+        if 'version' not in anno:
+            raise ValueError(f"missing 'version' field (video_id={anno.get('video_id', 'N/A')})")
+        if anno['version'] != 'VERSION 1.0':
+            raise ValueError(f"unsupported version '{anno['version']}' (video_id={anno.get('video_id', 'N/A')})")
         return anno
 
     def get_action_predicates(self):
