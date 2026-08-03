@@ -32,19 +32,19 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
         debug=args.debug)
 
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('sub_class_acc', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
-    metric_logger.add_meter('obj_class_acc', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
-    metric_logger.add_meter('verb_class_acc', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
-    
+    metric_logger.add_meter('sub_class_error', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
+    metric_logger.add_meter('obj_class_error', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
+    metric_logger.add_meter('verb_class_error', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
+
     optimizer.zero_grad()
-    
+
     for i, (samples, targets) in enumerate(metric_logger.log_every(data_loader, epoch, batch_size=args.batch_size*args.accumulate_steps)):
         # if args.debug:
-        #     debug_and_vis(args.datasets, samples, targets, i) 
-        
+        #     debug_and_vis(args.datasets, samples, targets, i)
+
         if not isinstance(samples, NestedTensor):
-            samples = NestedTensor.from_tensor_list(samples)  
-        
+            samples = NestedTensor.from_tensor_list(samples)
+
         samples = samples.to(device)  # 1,t,3,h,w
         targets = [target_to_cuda(t) for t in targets[0]]
         
@@ -86,10 +86,10 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
             optimizer.zero_grad()
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
-        metric_logger.update(sub_class_acc=loss_dict_reduced['sub_class_acc'])
-        metric_logger.update(obj_class_acc=loss_dict_reduced['obj_class_acc'])
-        metric_logger.update(verb_class_acc=loss_dict_reduced['verb_class_acc'])
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"], 
+        metric_logger.update(sub_class_error=loss_dict_reduced['sub_class_error'])
+        metric_logger.update(obj_class_error=loss_dict_reduced['obj_class_error'])
+        metric_logger.update(verb_class_error=loss_dict_reduced['verb_class_error'])
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"],
                              lr_backbone=optimizer.param_groups[1]["lr"])
 
     if (i+1) % args.accumulate_steps != 0:
@@ -117,10 +117,10 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
         debug=args.debug)
 
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('sub_class_acc', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
-    metric_logger.add_meter('obj_class_acc', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
-    metric_logger.add_meter('verb_class_acc', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
-    
+    metric_logger.add_meter('sub_class_error', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
+    metric_logger.add_meter('obj_class_error', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
+    metric_logger.add_meter('verb_class_error', utils.SmoothedValue(window_size=10, fmt='{value:.2f}'))
+
     optimizer.zero_grad()
     for i, (samples, targets) in enumerate(metric_logger.log_every(data_loader, epoch, batch_size=args.batch_size*args.accumulate_steps)):
         # if args.debug:
@@ -176,10 +176,10 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
         
         print('[info] metric_logger update metrics...')
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
-        metric_logger.update(sub_class_acc=loss_dict_reduced['sub_class_acc'])
-        metric_logger.update(obj_class_acc=loss_dict_reduced['obj_class_acc'])
-        metric_logger.update(verb_class_acc=loss_dict_reduced['verb_class_acc'])
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"], 
+        metric_logger.update(sub_class_error=loss_dict_reduced['sub_class_error'])
+        metric_logger.update(obj_class_error=loss_dict_reduced['obj_class_error'])
+        metric_logger.update(verb_class_error=loss_dict_reduced['verb_class_error'])
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"],
                              lr_backbone=optimizer.param_groups[1]["lr"])
         '''
         if visualizers and (i == 0 or not i % args.vis_and_log_interval):
