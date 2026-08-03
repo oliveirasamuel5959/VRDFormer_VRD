@@ -4,6 +4,7 @@ import sys
 import datetime
 import util.misc as utils
 from util.misc import NestedTensor, target_to_cuda
+from util.dist import reduce_dict
 from util.box_ops import debug_and_vis
 from util.evaluate import evaluate
 
@@ -67,7 +68,7 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
         is_loss_invalid(losses)
         
         # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
+        loss_dict_reduced = reduce_dict(loss_dict)
         loss_dict_reduced_unscaled = {f'{k}_unscaled': v
                                       for k, v in loss_dict_reduced.items()}
         loss_dict_reduced_scaled = {k: v * weight_dict[k]
@@ -75,7 +76,7 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
         losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
         loss_value = losses_reduced_scaled.item()
 
-        
+
         losses = losses / args.accumulate_steps
         losses.backward()
         if args.clip_max_norm > 0:
@@ -125,8 +126,10 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
         # if args.debug:
         #     debug_and_vis(args.datasets, samples, targets, i) 
         
+        print(f'[info] move samples and targets to device {device}...')
         samples = samples.to(device)  # bs,3,h,w
         targets = [target_to_cuda(t) for t in targets]
+        
         #import pdb;pdb.set_trace()
         # samples [2,3,H,W]
         # targets: [xxx, xxx]
@@ -139,16 +142,19 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
         # to pass it through as torch.nn.parallel.DistributedDataParallel only
         # passes copies
         
-
+        print('[info] flow targets and samples to model...')
         outputs, targets, *_ = model(samples, targets)
         #import pdb;pdb.set_trace()
+        
+        print('[info] loss calculation...')
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
         is_loss_invalid(losses)
         
+        print('[info] reduce losses over all GPUs for logging purposes...')
         # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
+        loss_dict_reduced = reduce_dict(loss_dict)
         loss_dict_reduced_unscaled = {f'{k}_unscaled': v
                                       for k, v in loss_dict_reduced.items()}
         loss_dict_reduced_scaled = {k: v * weight_dict[k]
@@ -156,9 +162,10 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
         losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
         loss_value = losses_reduced_scaled.item()
 
-        
-            
+
+
         losses = losses / args.accumulate_steps
+        print('[info] backpropagation lossess and weights update...')
         losses.backward()
         if args.clip_max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_max_norm)
@@ -166,7 +173,8 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
         if (i+1) % args.accumulate_steps == 0:
             optimizer.step()
             optimizer.zero_grad()
-            
+        
+        print('[info] metric_logger update metrics...')
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(sub_class_acc=loss_dict_reduced['sub_class_acc'])
         metric_logger.update(obj_class_acc=loss_dict_reduced['obj_class_acc'])
