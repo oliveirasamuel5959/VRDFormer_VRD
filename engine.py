@@ -235,7 +235,8 @@ def eval_stage2(model, val_loader, device, epoch, args):
                            eos=(fid+1)==len(frame_ids),
                            is_eval=True
                         )  
-        preds, scores = model.module.relation_classifier(memory, gt=targets[0]['groundtruth'], is_eval=True)
+        model_without_ddp = model.module if hasattr(model, 'module') else model
+        preds, scores = model_without_ddp.relation_classifier(memory, gt=targets[0]['groundtruth'], is_eval=True)
         prediction[video_id] = []
         for j, pred in enumerate(preds):
             prediction[video_id].append({'triplet': (groundtruth[video_id][j]['triplet'][0], action_dict[pred], groundtruth[video_id][j]['triplet'][2]),
