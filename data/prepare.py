@@ -110,7 +110,7 @@ def generate_vrd_annos(root_dir, dbname):
         if "part" in dbname and video_num > 100:
             break
         
-        vid = anno_file.split(".")[0].split("/")[-1]
+        vid = os.path.basename(anno_file).split(".")[0]
     
         with open(anno_file, "r") as f:
             data = json.load(f)
