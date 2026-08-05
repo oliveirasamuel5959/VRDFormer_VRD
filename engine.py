@@ -125,8 +125,6 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
     for i, (samples, targets) in enumerate(metric_logger.log_every(data_loader, epoch, batch_size=args.batch_size*args.accumulate_steps)):
         # if args.debug:
         #     debug_and_vis(args.datasets, samples, targets, i) 
-        
-        print(f'[info] move samples and targets to device {device}...')
         samples = samples.to(device)  # bs,3,h,w
         targets = [target_to_cuda(t) for t in targets]
         
@@ -141,18 +139,14 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
         # in order to be able to modify targets inside the forward call we need
         # to pass it through as torch.nn.parallel.DistributedDataParallel only
         # passes copies
-        
-        print('[info] flow targets and samples to model...')
         outputs, targets, *_ = model(samples, targets)
         #import pdb;pdb.set_trace()
         
-        print('[info] loss calculation...')
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
         is_loss_invalid(losses)
         
-        print('[info] reduce losses over all GPUs for logging purposes...')
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = reduce_dict(loss_dict)
         loss_dict_reduced_unscaled = {f'{k}_unscaled': v
@@ -165,7 +159,6 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
 
 
         losses = losses / args.accumulate_steps
-        print('[info] backpropagation lossess and weights update...')
         losses.backward()
         if args.clip_max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_max_norm)
@@ -174,7 +167,6 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
             optimizer.step()
             optimizer.zero_grad()
         
-        print('[info] metric_logger update metrics...')
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(sub_class_error=loss_dict_reduced['sub_class_error'])
         metric_logger.update(obj_class_error=loss_dict_reduced['obj_class_error'])
