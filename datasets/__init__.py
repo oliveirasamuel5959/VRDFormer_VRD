@@ -70,6 +70,7 @@ def dataloader_initializer(args):
     dataset_train = build_dataset(split='train', args=args)
     dataset_val = build_dataset(split='val', args=args)
     if not args.debug:
+        print('[info] computing zeroshot triplets (val triplets - train triplets)...')
         dataset_val.zeroshot_triplets = dataset_val.get_triplets().difference(dataset_train.get_triplets())
     
     if args.distributed:

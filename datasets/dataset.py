@@ -8,6 +8,10 @@ import glob
 from tqdm import tqdm
 from collections import defaultdict
 from torch.utils.data import Dataset
+
+# Module-level cache for annotation pickles: avoid loading the same file
+# twice when building both train and val datasets.
+_ANNO_CACHE = {}
 from decord import VideoReader, cpu
 from util.box_ops import box_cxcywh_to_xyxy
 from . import video_transforms as T
@@ -110,9 +114,13 @@ class VRDBase(Dataset):
         if not debug:
             self.load_raw_annotations(image_set) 
         
-        print('[info] loading processed annotations...')
-        with open(self.anno_file, "rb") as f:
-            self.annotations = pkl.load(f)
+        if self.anno_file not in _ANNO_CACHE:
+            print('[info] loading processed annotations...')
+            with open(self.anno_file, "rb") as f:
+                _ANNO_CACHE[self.anno_file] = pkl.load(f)
+        else:
+            print('[info] using cached processed annotations')
+        self.annotations = _ANNO_CACHE[self.anno_file]
 
         self.video_ids = [vid.split(".")[0] for vid in os.listdir(self.data_dir+"/annotations/%s"%self.image_set)]
     
