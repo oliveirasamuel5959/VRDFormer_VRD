@@ -38,6 +38,12 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
 
     optimizer.zero_grad()
 
+    # Automatic mixed precision: bf16 on Ampere+ GPUs (no loss scaling needed),
+    # fp16 with GradScaler elsewhere.
+    amp_enabled = getattr(args, 'amp', False)
+    amp_dtype = torch.bfloat16 if (amp_enabled and torch.cuda.is_bf16_supported()) else torch.float16
+    scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled and amp_dtype != torch.bfloat16)
+
     for i, (samples, targets) in enumerate(metric_logger.log_every(data_loader, epoch, batch_size=args.batch_size*args.accumulate_steps)):
         # if args.debug:
         #     debug_and_vis(args.datasets, samples, targets, i)
@@ -47,26 +53,27 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
 
         samples = samples.to(device)  # 1,t,3,h,w
         targets = [target_to_cuda(t) for t in targets[0]]
-        
-        # given annos of boxes, predicate class of {s,p,o} 
+
+        # given annos of boxes, predicate class of {s,p,o}
         # we don't use the rec-query and initialize static-query by given boxes
-        
+
         memory = None
-        for fid in range(args.seq_len): 
-            cur_frame = samples.select_frame(fid)  # 1,3,H,W, 
-            memory = model(cur_frame,
-                           targets[fid], 
-                           memory, 
-                           eos=(fid+1)==args.seq_len
-                        )  
-       
-        loss_dict = criterion(memory) 
-        
-        weight_dict = criterion.weight_dict
-   
-        losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+        with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=amp_dtype):
+            for fid in range(args.seq_len):
+                cur_frame = samples.select_frame(fid)  # 1,3,H,W,
+                memory = model(cur_frame,
+                               targets[fid],
+                               memory,
+                               eos=(fid+1)==args.seq_len
+                            )
+
+            loss_dict = criterion(memory)
+
+            weight_dict = criterion.weight_dict
+
+            losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
         is_loss_invalid(losses)
-        
+
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = reduce_dict(loss_dict)
         loss_dict_reduced_unscaled = {f'{k}_unscaled': v
@@ -78,11 +85,20 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
 
 
         losses = losses / args.accumulate_steps
-        losses.backward()
-        if args.clip_max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_max_norm)
+        if scaler.is_enabled():
+            scaler.scale(losses).backward()
+        else:
+            losses.backward()
         if (i+1) % args.accumulate_steps == 0:
-            optimizer.step()
+            if scaler.is_enabled():
+                scaler.unscale_(optimizer)
+            if args.clip_max_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_max_norm)
+            if scaler.is_enabled():
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
             optimizer.zero_grad()
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
@@ -93,13 +109,21 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
                              lr_backbone=optimizer.param_groups[1]["lr"])
 
     if (i+1) % args.accumulate_steps != 0:
-        optimizer.step()
+        if scaler.is_enabled():
+            scaler.unscale_(optimizer)
+        if args.clip_max_norm > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_max_norm)
+        if scaler.is_enabled():
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            optimizer.step()
         optimizer.zero_grad()
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
-    
+
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
@@ -207,34 +231,37 @@ def eval_stage2(model, val_loader, device, epoch, args):
     val_dataset = val_loader.dataset
     groundtruth = dict()
     prediction = dict()
+    amp_enabled = getattr(args, 'amp', False)
+    amp_dtype = torch.bfloat16 if (amp_enabled and torch.cuda.is_bf16_supported()) else torch.float16
     for i, (samples, targets) in enumerate(metric_logger.log_every(val_loader, epoch)):
         if not isinstance(samples, NestedTensor):
-            samples = NestedTensor.from_tensor_list(samples)  
-        
+            samples = NestedTensor.from_tensor_list(samples)
+
         samples = samples.to(device)
         targets = [target_to_cuda(t) for t in targets[0]]
         video_id = targets[0]['video_id']
-        
+
         groundtruth[video_id] = targets[0]['groundtruth']
         frame_ids = [int(target['frame_id']) for target in targets]
-        
+
         memory = None
-        for fid in range(len(frame_ids)): 
-            cur_frame = samples.select_frame(fid)  # 1,3,H,W, 
-            memory = model(cur_frame,
-                           targets[fid], 
-                           memory, 
-                           eos=(fid+1)==len(frame_ids),
-                           is_eval=True
-                        )  
-        model_without_ddp = model.module if hasattr(model, 'module') else model
-        preds, scores = model_without_ddp.relation_classifier(memory, gt=targets[0]['groundtruth'], is_eval=True)
+        with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=amp_dtype):
+            for fid in range(len(frame_ids)):
+                cur_frame = samples.select_frame(fid)  # 1,3,H,W,
+                memory = model(cur_frame,
+                               targets[fid],
+                               memory,
+                               eos=(fid+1)==len(frame_ids),
+                               is_eval=True
+                            )
+            model_without_ddp = model.module if hasattr(model, 'module') else model
+            preds, scores = model_without_ddp.relation_classifier(memory, gt=targets[0]['groundtruth'], is_eval=True)
         prediction[video_id] = []
         for j, pred in enumerate(preds):
             prediction[video_id].append({'triplet': (groundtruth[video_id][j]['triplet'][0], action_dict[pred], groundtruth[video_id][j]['triplet'][2]),
                                          'score': scores[j]
                                         })
-        scores = evaluate(groundtruth, prediction, val_dataset)
         print("[info] Video %d"%i)
-        print(scores)
+    scores = evaluate(groundtruth, prediction, val_dataset)
+    print(scores)
     return scores

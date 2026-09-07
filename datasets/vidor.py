@@ -24,13 +24,15 @@ class VidOR(VRDBase):
             seq_len, 
             num_quries,
             stage=1,
-            prev_frame=False, prev_frame_range=1, 
-            prev_frame_rnd_augs=0.0, prev_prev_frame=False, debug=False
+            prev_frame=False, prev_frame_range=1,
+            prev_frame_rnd_augs=0.0, prev_prev_frame=False, debug=False,
+            train_clip_sample_ratio=1.0
         ):
         num_verb_classes = 50
-        super().__init__(dbname, image_set, data_dir, max_duration, anno_file, transforms, 
+        super().__init__(dbname, image_set, data_dir, max_duration, anno_file, transforms,
                          trainval_imgset_file, seq_len, num_quries, num_verb_classes,
-                         stage, prev_frame, prev_frame_range, prev_frame_rnd_augs, prev_prev_frame, debug)
+                         stage, prev_frame, prev_frame_range, prev_frame_rnd_augs, prev_prev_frame, debug,
+                         train_clip_sample_ratio)
 
     def _check_anno(self, anno):
         if 'version' not in anno:
@@ -128,7 +130,8 @@ def build_dataset(image_set, args):
         prev_frame_range=prev_frame_range,
         prev_frame_rnd_augs=prev_frame_rnd_augs, 
         prev_prev_frame=args.track_prev_prev_frame,
-        debug=args.debug
+        debug=args.debug,
+        train_clip_sample_ratio=getattr(args, 'train_clip_sample_ratio', 1.0)
     )
 
         

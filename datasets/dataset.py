@@ -91,7 +91,8 @@ class VRDBase(Dataset):
             num_quries, 
             num_verb_classes,
             stage,
-            prev_frame, prev_frame_range, prev_frame_rnd_augs, prev_prev_frame, debug=False
+            prev_frame, prev_frame_range, prev_frame_rnd_augs, prev_prev_frame, debug=False,
+            train_clip_sample_ratio=1.0
         ):
         super().__init__()
         self.dbname = dbname
@@ -126,6 +127,16 @@ class VRDBase(Dataset):
     
         if self.image_set == "train":
             self.train_begin_fids, self.max_durations = data["train_begin_fids"], data["durations"]
+            if train_clip_sample_ratio < 1.0:
+                # Keep every k-th clip (stride subsampling). Clips are ordered by
+                # (video, frame) in the frames json, so this spreads the kept clips
+                # evenly over all videos instead of dropping whole videos. Order is
+                # re-randomized anyway by the DataLoader shuffle sampler.
+                stride = max(1, int(round(1.0 / train_clip_sample_ratio)))
+                self.train_begin_fids = self.train_begin_fids[::stride]
+                self.max_durations = self.max_durations[::stride]
+                print('[info] train clip subsampling: ratio %.2f -> kept %d of %d clips (stride %d)'
+                      % (train_clip_sample_ratio, len(self.train_begin_fids), len(data["train_begin_fids"]), stride))
         else:
             if self.normalize_coords:
                 print('[info] bounding boxes are normalized to [0, 1]')

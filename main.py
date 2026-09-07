@@ -71,6 +71,13 @@ def get_args_parser():
     parser.add_argument("--pretrain", default="", help="load pretrain from checkpoint")
     parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
     parser.add_argument("--num_workers", default=0, type=int)
+    parser.add_argument("--amp", action="store_true",
+                        help="Use automatic mixed precision (bf16 on A100, fp16 otherwise) in train_stage2")
+    parser.add_argument("--benchmark", action="store_true",
+                        help="Use cudnn.benchmark=True instead of deterministic mode (faster convs)")
+    parser.add_argument("--train_clip_sample_ratio", default=1.0, type=float,
+                        help="Fraction of training clips to keep per epoch (stage 1 and 2). "
+                             "1.0 = all clips. 0.25 = every 4th clip (~4x faster epoch).")
 
     # Dataset Specific
     parser.add_argument("--dataset_config", default=None, required=True)
@@ -175,7 +182,8 @@ def main(args):
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.deterministic = not args.benchmark
+    torch.backends.cudnn.benchmark = args.benchmark
     if int(torch.__version__.split(".")[1]) <= 8:  # for torch version<=1.8
         torch.set_deterministic(True)  
     

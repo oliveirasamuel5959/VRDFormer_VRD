@@ -18,5 +18,8 @@
     "position_embedding": "sine_3d_v2",
     "num_feature_levels": 1,
     "focal_loss": true,
-    "batch_size": 1
+    "batch_size": 1,
+    "train_clip_sample_ratio": 0.25,
+    "amp": true,
+    "benchmark": true
 }
