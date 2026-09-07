@@ -173,7 +173,9 @@ def resume_stage2(model_state_dict, checkpoint_state_dict):
 def param_initializer(args, model_without_ddp, optimizer, lr_scheduler):
     if args.resume:
         print("Loading checkpoint from %s"%args.resume)
-        checkpoint = torch.load(args.resume, map_location='cpu')
+        # weights_only=False: checkpoints pickle argparse.Namespace, which
+        # fails under the PyTorch>=2.6 default weights_only=True
+        checkpoint = torch.load(args.resume, map_location='cpu', weights_only=False)
         model_without_ddp.load_state_dict(checkpoint['model'])
         if 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
@@ -186,7 +188,7 @@ def param_initializer(args, model_without_ddp, optimizer, lr_scheduler):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.pretrain, map_location='cpu', check_hash=True)
         else:
-            checkpoint = torch.load(args.pretrain, map_location='cpu')
+            checkpoint = torch.load(args.pretrain, map_location='cpu', weights_only=False)
 
         model_state_dict = model_without_ddp.state_dict()
         checkpoint_state_dict = checkpoint['model']
