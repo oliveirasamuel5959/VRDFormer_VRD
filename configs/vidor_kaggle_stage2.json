@@ -3,7 +3,7 @@
     "vidor_path": "data/vidor",
     "pretrain": "data/ckpts/vidor_stage1/checkpoint0000.pth",
     "output_dir": "data/ckpts/vidor_stage2",
-    "epochs": 2,
+    "epochs": 1,
     "lr_drop": 1,
     "num_workers": 2,
     "max_duration": 24,
