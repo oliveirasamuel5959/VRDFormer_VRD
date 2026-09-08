@@ -258,7 +258,7 @@ class NestedTensor(object):
             batch_shape = (len(tensor_list),) + max_size
             b, c, t, h, w = batch_shape
 
-            assert b==8  # now batchsize is fixed as 1
+            assert b==1  # now batchsize is fixed as 1
             if do_round:
                 # Round to an even size to avoid rounding issues in fpn
                 p = 128
