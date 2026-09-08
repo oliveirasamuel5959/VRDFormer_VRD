@@ -51,8 +51,10 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
         if not isinstance(samples, NestedTensor):
             samples = NestedTensor.from_tensor_list(samples)
 
-        samples = samples.to(device)  # 1,t,3,h,w
-        targets = [target_to_cuda(t) for t in targets[0]]
+        samples = samples.to(device)  # b,t,3,h,w
+        # targets: list over clips; each clip -> list of per-frame target dicts
+        targets = [[target_to_cuda(t) for t in clip_targets] for clip_targets in targets]
+        B = len(targets)
 
         # given annos of boxes, predicate class of {s,p,o}
         # we don't use the rec-query and initialize static-query by given boxes
@@ -60,14 +62,17 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
         memory = None
         with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=amp_dtype):
             for fid in range(args.seq_len):
-                cur_frame = samples.select_frame(fid)  # 1,3,H,W,
+                cur_frame = samples.select_frame(fid)  # b,3,H,W
+                frame_targets = [clip_targets[fid] for clip_targets in targets]
                 memory = model(cur_frame,
-                               targets[fid],
+                               frame_targets,
                                memory,
                                eos=(fid+1)==args.seq_len
                             )
 
-            loss_dict = criterion(memory)
+            # sum per-clip losses -> preserves bs1 gradient scale (no LR change needed)
+            loss_dicts = [criterion(m) for m in memory]
+            loss_dict = {k: sum(d[k] for d in loss_dicts) for k in loss_dicts[0]}
 
             weight_dict = criterion.weight_dict
 
@@ -249,13 +254,13 @@ def eval_stage2(model, val_loader, device, epoch, args):
             for fid in range(len(frame_ids)):
                 cur_frame = samples.select_frame(fid)  # 1,3,H,W,
                 memory = model(cur_frame,
-                               targets[fid],
+                               [targets[fid]],
                                memory,
                                eos=(fid+1)==len(frame_ids),
                                is_eval=True
                             )
             model_without_ddp = model.module if hasattr(model, 'module') else model
-            preds, scores = model_without_ddp.relation_classifier(memory, gt=targets[0]['groundtruth'], is_eval=True)
+            preds, scores = model_without_ddp.relation_classifier(memory[0], gt=targets[0]['groundtruth'], is_eval=True)
         prediction[video_id] = []
         for j, pred in enumerate(preds):
             prediction[video_id].append({'triplet': (groundtruth[video_id][j]['triplet'][0], action_dict[pred], groundtruth[video_id][j]['triplet'][2]),

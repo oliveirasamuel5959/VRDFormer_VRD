@@ -212,7 +212,8 @@ class NestedTensor(object):
         return self.tensors, self.mask
 
     def select_frame(self, fid):
-        return NestedTensor(self.tensors[fid: fid+1], self.mask[fid: fid+1])
+        # clip batch layout: tensors (b, t, c, h, w), mask (b, t, h, w)
+        return NestedTensor(self.tensors[:, fid], self.mask[:, fid])
 
     def __repr__(self):
         return str(self.tensors)
@@ -253,40 +254,25 @@ class NestedTensor(object):
             for img, pad_img, m in zip(tensor_list, tensor, mask):
                 pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
                 m[: img.shape[1], : img.shape[2]] = False
-        elif tensor_list[0].ndim == 4:  # videos
-            max_size = tuple(max(s) for s in zip(*[clip.shape for clip in tensor_list]))  
-            batch_shape = (len(tensor_list),) + max_size
-            b, c, t, h, w = batch_shape
-
-            assert b==1  # now batchsize is fixed as 1
+        elif tensor_list[0].ndim == 4:  # video clips, each (c, t_i, h_i, w_i)
+            max_size = tuple(max(s) for s in zip(*[clip.shape for clip in tensor_list]))
+            b, c, t, h, w = (len(tensor_list),) + max_size
             if do_round:
                 # Round to an even size to avoid rounding issues in fpn
                 p = 128
                 h = h if h % p == 0 else (h // p + 1) * p
                 w = w if w % p == 0 else (w // p + 1) * p
-                batch_shape = b, c, t, h, w
             dtype = tensor_list[0].dtype
             device = tensor_list[0].device
 
-            nb_images = sum(
-                clip.shape[1] for clip in tensor_list
-            )  # total number of frames in the batch
-            tensor = torch.zeros((nb_images, c, h, w), dtype=dtype, device=device)
-            mask = torch.ones((nb_images, h, w), dtype=torch.bool, device=device)
-            cur_dur = 0
+            # (b, t, c, h, w) so select_frame(fid) yields an image batch (b, c, h, w);
+            # per-clip padding is right/bottom and recorded in the mask
+            tensor = torch.zeros((b, t, c, h, w), dtype=dtype, device=device)
+            mask = torch.ones((b, t, h, w), dtype=torch.bool, device=device)
             for i_clip, clip in enumerate(tensor_list):
-                tensor[
-                    cur_dur : cur_dur + clip.shape[1],
-                    : clip.shape[0],
-                    : clip.shape[2],
-                    : clip.shape[3],
-                ].copy_(clip.transpose(0, 1))
-                mask[
-                    cur_dur : cur_dur + clip.shape[1], : clip.shape[2], : clip.shape[3]
-                ] = False
-                cur_dur += clip.shape[1]
-            #tensor, mask = tensor.reshape(b,t,c,h,w), mask.reshape(b,t,h,w) # uncomment it when batchsize>1
-            tensor, mask = tensor.reshape(t,c,h,w), mask.reshape(t,h,w)
+                tensor[i_clip, :clip.shape[1], :, :clip.shape[2], :clip.shape[3]] = \
+                    clip.permute(1, 0, 2, 3)  # (t_i, c, h_i, w_i)
+                mask[i_clip, :clip.shape[1], :clip.shape[2], :clip.shape[3]] = False
         else:
             raise ValueError("not supported")
         

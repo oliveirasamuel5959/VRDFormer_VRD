@@ -103,12 +103,15 @@ the model class, the criterion, and the training loop simultaneously.
 - No tracking, no matcher, no box losses. Queries are **initialized from ground-truth boxes**:
   `Transformer.extract_roi_feat` does `roi_align` on the encoder input at `unscaled_{sub,obj}_boxes`,
   fuses s/o features through `so_linear`, and `prepare_tag_query` pads to `num_queries`.
-- `batch_size` must be 1: the training loop iterates frames of a single clip
-  (`samples.select_frame(fid)` for `fid in range(seq_len)`) and threads a `memory` dict through the
-  frames.
-- `memory` is keyed by `"<sub_tid>-<obj_tid>"` and accumulates per-frame `rel_embed`, `s_embed`,
-  `o_embed`, labels, and (eval only) `frame_ids`. At `eos` the whole sequence is mean-pooled per pair
-  and pushed through `relation_classifier` → one loss for the clip.
+- `batch_size` > 1 is supported (config sets 4): the collate packs clips as `(b,t,c,h,w)`
+  NestedTensors (`util/misc.py` video branch of `from_tensor_list`), the training loop feeds one
+  frame per clip per step (`samples.select_frame(fid)` for `fid in range(seq_len)`), and threads a
+  **list of B per-clip `memory` dicts** through the frames. The val loader is forced to batch 1
+  (val clips have variable frame counts; eval stays per-video).
+- Each `memory` dict is keyed by `"<sub_tid>-<obj_tid>"` and accumulates per-frame `rel_embed`,
+  `s_embed`, `o_embed`, labels, and (eval only) `frame_ids`. At `eos` each clip's sequence is
+  mean-pooled per pair and pushed through `relation_classifier` → per-clip losses are summed over
+  the batch (preserves batch-1 gradient scale; no LR change needed).
 - Loss is computed once per clip on the accumulated memory, not per frame.
 
 Shared plumbing: `models/__init__.py:build_model` is the single place that wires backbone +
@@ -154,8 +157,8 @@ Research code, mid-refactor. These bite immediately, so check before assuming a 
 - **Stage 1 has no eval path.** `main.py` only imports `eval_stage2` when `stage == 2`, but calls
   `eval_one_epoch` unconditionally after each epoch (`main.py:224`) → `NameError` at the end of
   stage-1 epoch 0. Same for `--eval --stage 1`.
-- **DDP launcher is mandatory.** `engine.py:229` calls `model.module.relation_classifier(...)`, which
-  only exists when the model is DDP-wrapped. Running `python main.py` directly fails in eval.
+- **DDP is optional for stage 2.** `engine.py:257` guards `model.module` with `hasattr(model,
+  'module')`, so plain `python main.py` (as used in the Colab notebook) works for train and eval.
 - `util/checkpoints.py:resume_value_deformable` contains live `import pdb;pdb.set_trace()` calls on
   several shape-mismatch branches; loading a deformable pretrain can drop into the debugger.
   `models/vrdformer.py:159` has one too.

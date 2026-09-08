@@ -160,32 +160,37 @@ class VRDFormer_S2(VRDFormer):
                 pos_list.append(pos_l)
         
         query_embed = None  # initialize from gt boxes
-        
-        hs, s_embed, o_embed = self.transformer(
-                                    src_list, 
-                                    mask_list, 
-                                    pos_list, 
-                                    query_embed, 
+
+        hs, s_embeds, o_embeds = self.transformer(
+                                    src_list,
+                                    mask_list,
+                                    pos_list,
+                                    query_embed,
                                     targets)
-        
+
         hs = hs[-1]  # bs,num_queries,dim
-        
+
         outputs_sub_coord = self.sub_bbox_embed[-1](hs).sigmoid()
         outputs_obj_coord = self.obj_bbox_embed[-1](hs).sigmoid()
-        
-        out = {"rel_embed": hs, 
-               's_embed': s_embed, 
-               'o_embed': o_embed,
-               'pred_sub_boxes': outputs_sub_coord[-1], 
-               'pred_obj_boxes': outputs_obj_coord[-1]}
-        
-        memory = self.memory_update(out, targets, memory, is_eval=is_eval)
 
-        if eos and not is_eval:
-            memory["pred_sub_logits"], memory["pred_verb_logits"], memory["pred_obj_logits"], \
-            memory["label_sub_classes"] , memory["label_verb_classes"], memory["label_obj_classes"] \
-                = self.relation_classifier(memory)
-                
+        B = len(targets)
+        if memory is None:
+            memory = [None] * B
+
+        for b in range(B):
+            out_b = {"rel_embed": hs[b].unsqueeze(0),  # (1, num_queries, dim) -> keeps
+                     's_embed': s_embeds[b],           # memory_update's [0] indexing intact
+                     'o_embed': o_embeds[b],
+                     'pred_sub_boxes': outputs_sub_coord[b],
+                     'pred_obj_boxes': outputs_obj_coord[b]}
+
+            memory[b] = self.memory_update(out_b, targets[b], memory[b], is_eval=is_eval)
+
+            if eos and not is_eval:
+                memory[b]["pred_sub_logits"], memory[b]["pred_verb_logits"], memory[b]["pred_obj_logits"], \
+                memory[b]["label_sub_classes"] , memory[b]["label_verb_classes"], memory[b]["label_obj_classes"] \
+                    = self.relation_classifier(memory[b])
+
         return memory
         
 

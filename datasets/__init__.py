@@ -91,8 +91,8 @@ def dataloader_initializer(args):
         num_workers=args.num_workers)
 
     data_loader_val = DataLoader(
-        dataset_val, 
-        args.batch_size,
+        dataset_val,
+        1,  # val clips have variable frame counts; eval stays per-video (no clip batching)
         sampler=sampler_val,
         drop_last=False,
         collate_fn=utils.collate_fn,

@@ -72,33 +72,32 @@ class Transformer(nn.Module):
 
         normal_(self.level_embed)
 
-    def extract_roi_feat(self, src, boxes):
-        box_fts = roi_align(src, 
-                            torch.cat([torch.full((len(boxes), 1), 0).cuda(), boxes], dim=1), 
-                            self.roi_output_scales[-1], 
-                            spatial_scale=1./self.downsample_scales[-1], 
+    def extract_roi_feat(self, src, boxes, batch_idx=0):
+        batch_col = torch.full((len(boxes), 1), float(batch_idx),
+                               dtype=boxes.dtype, device=boxes.device)
+        box_fts = roi_align(src,
+                            torch.cat([batch_col, boxes], dim=1),
+                            self.roi_output_scales[-1],
+                            spatial_scale=1./self.downsample_scales[-1],
                             sampling_ratio=-1
-                        )  
+                        )
         return self.roi_pool_layer(box_fts).squeeze(2).squeeze(2)
-    
-    def prepare_tag_query(self, so_embed, targets):
+
+    def prepare_tag_query(self, so_embeds, targets):
         # during relation tag, the query embed is initialized by roi feats of boxes
-        num_svo = targets["num_inst"]
-        query_sboxes = torch.zeros((self.num_queries, 4)).cuda()
-        query_oboxes = torch.zeros((self.num_queries, 4)).cuda()
-        query_embed = torch.zeros((self.num_queries, self.d_model)).cuda()
-        query_masks = torch.ones(self.num_queries).bool().cuda()
+        # so_embeds: list of B tensors, each (num_svo_b, d_model); targets: B frame dicts
+        B = len(so_embeds)
+        device, dtype = so_embeds[0].device, so_embeds[0].dtype
+        query_embed = torch.zeros((B, self.num_queries, self.d_model),
+                                  dtype=dtype, device=device)
+        query_masks = torch.ones((B, self.num_queries), dtype=torch.bool, device=device)
 
-        query_embed[:num_svo] = so_embed
-        query_embed = query_embed.unsqueeze(0)
+        for b in range(B):
+            num_svo = targets[b]["num_inst"]
+            query_embed[b, :num_svo] = so_embeds[b]
+            query_masks[b, :num_svo] = False
 
-        query_sboxes[:num_svo] = targets["sub_boxes"]
-        query_oboxes[:num_svo] = targets["obj_boxes"]
-        
-        query_masks[:num_svo] = 0
-        query_masks = query_masks.unsqueeze(0)
-
-        return query_embed
+        return query_embed.permute(1, 0, 2), query_masks  # (num_queries, B, d), (B, num_queries)
     
     def forward(self, srcs, masks, pos_embeds, query_embed=None, targets=None):
         src_flatten = []
@@ -141,24 +140,29 @@ class Transformer(nn.Module):
         
         if self.stage == 2:
 
+            # targets: list of B frame-target dicts (one per clip at frame fid)
             # individual s_embed and o_embed are extracted from the encoder
-            s_embed = self.extract_roi_feat(srcs[-1], targets["unscaled_sub_boxes"])  
-            o_embed = self.extract_roi_feat(srcs[-1], targets["unscaled_obj_boxes"])
-            so_embed = self.so_linear(torch.cat([s_embed, o_embed], dim=1)) 
-            query_embed = self.prepare_tag_query(so_embed, targets)
-            query_embed = query_embed.permute(1, 0, 2)
-            
+            s_embeds, o_embeds = [], []
+            for b, tgt in enumerate(targets):
+                s_embeds.append(self.extract_roi_feat(srcs[-1], tgt["unscaled_sub_boxes"], b))
+                o_embeds.append(self.extract_roi_feat(srcs[-1], tgt["unscaled_obj_boxes"], b))
+            so_embeds = [self.so_linear(torch.cat([s, o], dim=1))
+                         for s, o in zip(s_embeds, o_embeds)]
+            query_embed, query_masks = self.prepare_tag_query(so_embeds, targets)
+            # query_embed already (num_queries, B, d_model)
+
             tgt = torch.zeros_like(query_embed)
 
-            hs = self.decoder( 
-                tgt,  
-                memory,   
+            hs = self.decoder(
+                tgt,
+                memory,
                 memory_key_padding_mask=mask_flatten,
-                pos=lvl_pos_embed_flatten, 
+                tgt_key_padding_mask=query_masks,
+                pos=lvl_pos_embed_flatten,
                 query_pos=query_embed,
             )
-            
-            return hs.transpose(1, 2), s_embed, o_embed
+
+            return hs.transpose(1, 2), s_embeds, o_embeds
             
         _, bs, c = memory.shape
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
