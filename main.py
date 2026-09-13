@@ -184,8 +184,8 @@ def main(args):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = not args.benchmark
     torch.backends.cudnn.benchmark = args.benchmark
-    if int(torch.__version__.split(".")[1]) <= 8:  # for torch version<=1.8
-        torch.set_deterministic(True)  
+    if hasattr(torch, 'set_deterministic'):  # removed in torch 2.0; newer torch skips this
+        torch.set_deterministic(True)
     
     model, model_without_ddp, criterion, n_parameters = model_initializer(args, device)
     
