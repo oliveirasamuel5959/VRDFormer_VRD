@@ -136,14 +136,14 @@ From the **local WSL2 machine** (uploads credentials + stage-1 ckpts, ~1.4 GB):
 scp -P <exposed-ssh-port> -i ~/.ssh/id_ed25519 ~/.kaggle/kaggle.json root@<pod-ip>:/root/.kaggle/
 scp -P <exposed-ssh-port> -i ~/.ssh/id_ed25519 -r \
   "/mnt/c/Users/Samuel Oliveira/Desktop/CS/VRDFormer_VRD/data/ckpts/vidor_stage1" \
-  root@<pod-ip>:/workspace/VRDFormer_VRD/data/ckpts/
+  root@<pod-ip>:/workspace/VRDFormer_VRD/data/ckpts/vidor_stage1/
 ```
 
 On the **pod** (mirrors notebook cells 6–7; ~12 min at ~40 MB/s):
 
 ```bash
 chmod 600 ~/.kaggle/kaggle.json
-mkdir -p data/metadata data/weights data/ckpts
+mkdir -p data/metadata data/weights data/ckpts/vidor_stage1
 kaggle datasets download samuelpatricio/vrdformer-vidor
 unzip -q vrdformer-vidor.zip -d data && rm vrdformer-vidor.zip
 mv data/vidor/metadata/* data/metadata/ 2>/dev/null || true
