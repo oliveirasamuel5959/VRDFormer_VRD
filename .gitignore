@@ -1,4 +1,7 @@
-data/
+*.mp4/
+*.pkl
+*.pth
+*.pt
 __pycache__/
 *.pyc
 *.pyo
