@@ -71,7 +71,14 @@ def dataloader_initializer(args):
     dataset_val = build_dataset(split='val', args=args)
     if not args.debug:
         print('[info] computing zeroshot triplets (val triplets - train triplets)...')
-        dataset_val.zeroshot_triplets = dataset_val.get_triplets().difference(dataset_train.get_triplets())
+        # On small subsets the zeroshot scan can fail (e.g. a missing video or an
+        # annotation without the expected fields). Eval still works with an empty set,
+        # so warn and continue rather than aborting the whole run.
+        try:
+            dataset_val.zeroshot_triplets = dataset_val.get_triplets().difference(dataset_train.get_triplets())
+        except Exception as e:
+            print('[warn] zeroshot triplet computation failed, using empty set: %s' % e)
+            dataset_val.zeroshot_triplets = set()
     
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)

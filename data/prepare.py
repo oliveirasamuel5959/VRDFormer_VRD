@@ -281,7 +281,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("Prepare Data", add_help=False)
     parser.add_argument("--func", type=str)
     parser.add_argument("--root_dir", default="/home/zhengsipeng/data", type=str)
-    parser.add_argument("--dbname", default="vidvrd", type=str, choices=["vidvrd", "vidor", "vidorpart"])
+    parser.add_argument("--dbname", default="vidvrd", type=str, choices=["vidvrd", "vidor", "vidorpart", "vidorsmall"])
     parser.add_argument("--split", default="train", type=str, choices=["train", "val"])
     parser.add_argument("--timestep", default=1, type=int)  # 1 for vidvrd, 8 for vidor
     parser.add_argument("--minmax_dur", default=24, type=int) # 24 for vidvrd, 32 for vidor
