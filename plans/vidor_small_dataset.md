@@ -286,30 +286,43 @@ Add `notebooks/colab_kaggle_train_small.ipynb` (copy of `colab_kaggle_train.ipyn
 
 ---
 
-## 5. What changes in the numbers (expected)
+## 5. What changed in the numbers (measured after generation)
 
-| Quantity | Full vidor | `vidorsmall` (1/8) |
-|----------|-----------|--------------------|
-| Train videos | 7,000 | ~875 |
-| Val videos | 835 | ~104 |
-| Videos on disk | 27.0 GB | ~3.4 GB |
-| Train JSONs | 2.4 GB | ~0.30 GB |
-| Stage-1 train clips | 303,120 | ~38,000 |
-| Stage-2 train clips | 282,389 | ~35,000 |
-| Annotations pkl | 3.07 GB | ~0.38 GB |
-| Epoch time (Stage 1) | baseline | ~8× faster |
-| Kaggle bundle | 17.5 GB | ~4.1 GB |
+The 1/8 cut was applied **per video**. Because the coverage-stratified picker favors
+relation-dense videos, those videos are longer and carry more clips than average, so the
+clip/epoch reduction is smaller than 8×:
 
-**Coverage caveat (important):** a 1/8 *train* cut can be made to cover all 50 verbs + 80 objects by the
-stratified picker, but a 1/8 *val* cut (104 videos) likely **cannot** cover every class. Consequences:
+| Quantity | Full vidor | `vidorsmall` (measured) | Factor |
+|----------|-----------|-------------------------|--------|
+| Train videos | 7,000 | 875 | 8.0× |
+| Val videos | 835 | 104 | 8.0× |
+| Videos on disk | 28.98 GB | 4.17 GB | 6.9× |
+| Avg video size | 3.70 MB | 4.26 MB | (picker favors longer videos) |
+| Annotations dir | 2.80 GB | 0.47 GB | 6.0× |
+| Annotations pkl | 3.07 GB | 0.61 GB | 5.0× |
+| Stage-1 train clips | 303,120 (2,942 videos) | 116,241 (875 videos) | **2.6× fewer** |
+| Stage-2 train clips | 282,389 | 106,492 | 2.7× fewer |
+| Clips per video | 103 | 133 | +29% |
+| Kaggle bundle zip | 17.5 GB | 4.45 GB | 3.9× |
 
-- Rare verbs (e.g. `shout_at`, `cut`, `get_on`, `knock`) will have single-digit instances — mAP on them
-  will be near-zero and noisy.
+**So an epoch is ~2.6× faster, not 8×.** The stored dataset and download/upload are ~6–8×
+smaller; training throughput is ~2.6× better. For a bigger clip reduction, lower the ratios
+(e.g. `--train_ratio 0.04`) rather than the picker, or subsample clips with
+`train_clip_sample_ratio` in the config (Stage 2 already runs at 0.25).
+
+Coverage came out better than predicted: **all 50 verbs and 80 objects are present in both
+splits**, and 5,777 of 6,258 (92%) of all relation triplets survive in the train subset.
+
+**Coverage caveat:** while class *presence* is guaranteed, sample *counts* for rare classes are
+thin, so:
+
+- Rare verbs (e.g. `shout_at`, `cut`, `get_on`, `knock`) have few instances — their per-class mAP
+  is noisy and near-zero.
 - `zeroshot_triplets = val_triplets − train_triplets` is computed against the *small* train split
   (`datasets/__init__.py`), so more val triplets count as "zero-shot" than on full data — zero-shot
-  numbers will be **inflated and not comparable** to the paper's full-data results.
-- This is fine for a fast iteration/smoke dataset. If evaluation stability matters, bump `--val_ratio`
-  (e.g. 0.25–1.0) — the val split is only 277 MB of JSON + ~104–835 small videos.
+  numbers are **inflated and not comparable** to the paper's full-data results.
+- This is fine for fast iteration and smoke tests. If evaluation stability matters, bump `--val_ratio`
+  (e.g. 0.25–1.0) — val is only 277 MB of JSON + 104–835 small videos.
 
 Add a guard so an **empty** zeroshot set doesn't crash the eval path:
 
