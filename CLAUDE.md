@@ -10,17 +10,45 @@ Deformable-DETR / TrackFormer, so much of `models/` and `util/` is DETR/TrackFor
 from single-object queries to **subject-object pair** queries (every prediction head is duplicated
 into `sub_*` / `obj_*`, plus a multi-label `verb_*` head).
 
-There is no test suite, linter config, or CI. Verification means running training/eval on real data.
+The repo targets Python 3.10 (`.python-version`). `pyproject.toml` declares PyTorch 2.5.1+ and Ruff;
+`docs/INSTALL.md` and `docs/requirements.txt` describe the original, older Python 3.7 / PyTorch 1.10
+setup and should be treated as historical where they conflict. There is no general unit-test suite or
+CI; the two `models/ops/test*.py` scripts exercise only the optional deformable-attention extension.
 
 ## Commands
 
-Install (Python 3.7, PyTorch 1.10+cu111 — see `docs/INSTALL.md`):
+Install (the current `pyproject.toml` / `uv.lock` are Python 3.10+; the pinned legacy requirements
+and install instructions are not aligned with those files):
 
 ```bash
-pip install -r docs/requirements.txt
-pip3 install -U 'git+https://github.com/timmeinhardt/cocoapi.git#subdirectory=PythonAPI'
-cd models/ops && sh make.sh        # MultiScaleDeformableAttention; only needed for --deformable
+uv sync                             # sync the declared project dependencies
+ruff check .                        # lint (Ruff config is in pyproject.toml)
+ruff format --check .               # check formatting; apply with `ruff format .`
 ```
+
+There is no project-wide pytest suite or configured CI. The standalone deformable-attention checks
+require the CUDA extension and a CUDA-capable environment; run them only after building the extension:
+
+```bash
+cd models/ops && sh make.sh && cd ../..
+python models/ops/test.py
+python models/ops/test_double_precision.py
+```
+
+Training and evaluation wrappers are the canonical launch commands; run from the repository root.
+They use `torch.distributed.launch` even for one GPU. Choose a config matching the dataset, stage,
+and machine; configs include machine-specific dataset/checkpoint paths:
+
+```bash
+sh scripts/stage1/train_vidorsmall.sh   # small VidOR subset, one GPU by default
+sh scripts/stage1/train.sh              # VidVRD, DETR backbone, 8 GPUs
+sh scripts/stage2/train.sh              # VidVRD stage 2
+sh scripts/stage2/eval_vidorsmall.sh    # stage-2 evaluation with configured checkpoint
+```
+
+Set `NPROC_PER_NODE=<gpu_count>` to override the small-subset wrappers' one-GPU default. The main
+training scripts under `scripts/stage1/` and `scripts/stage2/` cover other datasets and deformable
+variants. Deformable variants require a compatible CUDA build of `models/ops`.
 
 Data preparation (`docs/DATA.md`). **`data/prepare.py` resolves `metadata/` and `<dbname>/action.txt`
 relative to CWD, so run it from inside `data/`** — otherwise it writes the pickles where the datasets
@@ -34,33 +62,7 @@ python prepare.py --func get_fid --dbname vidvrd --split train --stage 1 --times
 python prepare.py --func get_fid --dbname vidvrd --split val   --timestep 1 --minmax_dur 24
 ```
 
-Training — always through `torch.distributed.launch`, even on one GPU (see gotcha below). The
-`scripts/` wrappers are the canonical invocations:
-
-```bash
-sh scripts/stage1/train.sh              # VidVRD, DETR backbone, 8 GPUs
-sh scripts/stage2/train.sh              # VidVRD stage 2, 1 GPU
-sh scripts/stage1/train_deform.sh       # deformable variants
-sh scripts/stage1/train_vidor.sh        # VidOR
-```
-
-Each script is a thin wrapper around:
-
-```bash
-python -m torch.distributed.launch --master_port 47749 --nproc_per_node=8 main.py \
-    --accumulate_steps 1 --lr_backbone 1e-5 --lr 5e-5 --num_queries 200 \
-    --dataset_config configs/vidvrd_stage1.json
-```
-
-Evaluation only (stage 2 only):
-
-```bash
-python -m torch.distributed.launch --nproc_per_node=1 main.py --eval \
-    --dataset_config configs/vidvrd_stage2.json --resume data/ckpts/.../checkpoint.pth
-```
-
-Quick smoke run: add `--debug` (forces `num_workers=0`, skips raw-annotation loading and the
-zero-shot triplet diff), or use `configs/vidorpart_stage1.json` which caps the dataset at 100 videos.
+Quick smoke run: use `configs/vidorpart_stage1.json` (100 videos), or a small-subset wrapper. `--debug` forces `num_workers=0` and skips the zero-shot triplet scan.
 
 ## Configuration model
 
@@ -152,23 +154,6 @@ args that no longer exist (`args.crowdhuman_path`, `args.coco_and_crowdhuman_pre
 
 ## Known rough edges
 
-Research code, mid-refactor. These bite immediately, so check before assuming a bug is yours:
-
-- **Stage 1 has no eval path.** `main.py` only imports `eval_stage2` when `stage == 2`, but calls
-  `eval_one_epoch` unconditionally after each epoch (`main.py:224`) → `NameError` at the end of
-  stage-1 epoch 0. Same for `--eval --stage 1`.
-- **DDP is optional for stage 2.** `engine.py:257` guards `model.module` with `hasattr(model,
-  'module')`, so plain `python main.py` (as used in the Colab notebook) works for train and eval.
-- `util/checkpoints.py:resume_value_deformable` contains live `import pdb;pdb.set_trace()` calls on
-  several shape-mismatch branches; loading a deformable pretrain can drop into the debugger.
-  `models/vrdformer.py:159` has one too.
-- `engine.py:18` calls `datetime.now()` while only the `datetime` *module* is imported — the NaN-loss
-  path itself raises.
-- `configs/vidor_stage1_deform.json` sets `"dataset": "vidvrd"` and `vidvrd_path` pointing at the
-  vidor directory; the other VidOR configs mix `vidor_path` and `vidvrd_path` inconsistently while
-  `datasets/vidvrd.py` reads `args.vidvrd_path` and `datasets/vidor.py` reads `args.vidor_path`.
-- Argparse mixes separators: `--output-dir`, `--start-epoch`, `--world-size` use hyphens; everything
-  else uses underscores.
-- The working tree currently shows every tracked file as modified — that is a CRLF line-ending
-  conversion, not real content change. Use `git diff --stat` / `git diff -w` before concluding
-  anything about local edits.
+- Stage 1 can train but has no evaluation implementation. `--eval` is stage-2-only and asserts otherwise; stage-1 training does not run validation.
+- Deformable transformer configs require `num_feature_levels > 1` and a successfully built `models/ops` CUDA extension; the vanilla transformer asserts `num_feature_levels == 1`.
+- `datasets/__init__.py` routes only the exact dataset name `vidvrd` to VidVRD; names such as `vidorpart` use VidOR.
