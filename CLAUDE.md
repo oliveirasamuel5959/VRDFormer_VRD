@@ -11,8 +11,8 @@ from single-object queries to **subject-object pair** queries (every prediction 
 into `sub_*` / `obj_*`, plus a multi-label `verb_*` head).
 
 The repo targets Python 3.10 (`.python-version`). `pyproject.toml` declares PyTorch 2.5.1+ and Ruff;
-`docs/INSTALL.md` and `docs/requirements.txt` describe the original, older Python 3.7 / PyTorch 1.10
-setup and should be treated as historical where they conflict. There is no general unit-test suite or
+the legacy install instructions in `docs/INSTALL.md` and `docs/requirements-legacy.txt` describe the
+original, older Python 3.7 / PyTorch 1.10 setup and should be treated as historical where they conflict. There is no general unit-test suite or
 CI; the two `models/ops/test*.py` scripts exercise only the optional deformable-attention extension.
 
 ## Commands
