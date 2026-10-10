@@ -1,0 +1,13 @@
+# Validated RunPod Stage-1 baseline from notebooks/vrdformer.ipynb.
+# PyTorch and torchvision are provided by the CUDA-enabled RunPod image.
+# Keep NumPy <2 to avoid ABI mismatches in compiled wheels/extensions.
+numpy==1.26.4
+Cython==3.0.12
+decord==0.6.0
+timm==1.0.30
+scipy==1.17.1
+lap==0.5.13
+pycocotools==2.0.11
+opencv-python-headless==4.11.0.86
+Pillow==11.0.0
+tqdm==4.70.1

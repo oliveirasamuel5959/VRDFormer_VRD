@@ -1,50 +1,10 @@
 # Installation
 
-## Modern environment (Python 3.10+, RunPod / CUDA 12) — recommended
+## Modern RunPod Stage-1 setup (recommended)
 
-RunPod PyTorch images already provide a CUDA-enabled `torch` / `torchvision`. Do **not**
-install PyTorch yourself; install only the extra runtime dependencies.
+For the validated Python 3.12 / PyTorch 2.8 + CUDA 12.8 environment, use the single-run installer and checks in [`RUNPOD_STAGE1.md`](RUNPOD_STAGE1.md). It installs [`requirements-runpod-stage1.txt`](../requirements-runpod-stage1.txt) and preserves the PyTorch build from the RunPod image. Do **not** install the root `requirements.txt` in this environment: it contains historical Python 3.7 pins.
 
-1. Clone and enter this repository:
-    ```
-    git clone https://github.com/zhengsipeng/VRDFormer_VRD.git
-    cd VRDFormer_VRD
-    ```
-
-2. Install the dependencies (`decord`, `timm`, `scipy`, `lap`, `opencv-python-headless`,
-   `pycocotools`, ...). Run from the repository root:
-    ```
-    pip install -U pip setuptools wheel
-    pip install -r requirements.txt
-    ```
-    `timm` depends on `torch` / `torchvision`; because the image already provides a
-    compatible CUDA build, pip leaves them in place instead of reinstalling.
-
-    Single copy-paste block for a fresh pod:
-    ```bash
-    cd VRDFormer_VRD
-    pip install -U pip setuptools wheel
-    pip install -r requirements.txt
-    ```
-
-3. Verify (expect the image's `torch 2.x`, `cuda True` and `gpus 2` on a 2-GPU pod):
-    ```
-    python -c "import torch, torchvision, decord, timm, scipy, lap, pycocotools, cv2, numpy; print('torch', torch.__version__, '| cuda', torch.cuda.is_available(), '| gpus', torch.cuda.device_count())"
-    ```
-
-4. (Optional) Install the MultiScaleDeformableAttention extension. Only the `*_deform*.json`
-   configs use it; the default vidorsmall / vidor / vidvrd configs set `num_feature_levels: 1`
-   and do not need it:
-    ```
-    cd models/ops && python setup.py build install && cd ../..
-    ```
-
-5. Train on 2 GPUs with the modern launcher:
-    ```
-    torchrun --nproc_per_node=2 --master_port 47749 main.py \
-        --accumulate_steps 1 --lr_backbone 1e-5 --lr 5e-5 --num_queries 200 \
-        --dataset_config configs/vidorsmall_stage1.json
-    ```
+The optional MultiScaleDeformableAttention extension is needed only for deformable configs. Standard configs such as `configs/vidorsmall_stage1.json` use `num_feature_levels: 1` and do not need that extension.
 
 ## Legacy environment (Python 3.7, CUDA 11.1) — historical
 
@@ -81,8 +41,8 @@ pip install torch==1.9.0+cu111 torchvision==0.10.0+cu111 torchaudio==0.9.0 -f ht
 
 Note: the legacy set requires **Python 3.7** — `numpy==1.18.5`, `scipy==1.4.1`,
 `pandas==1.0.5` and `Pillow==7.1.2` have no wheels for Python 3.10+ and will not build
-there. The modern set is kept in `requirements.txt` / `docs/requirements.txt`; the frozen
-legacy pin list is kept in `docs/requirements-legacy.txt`.
+there. The root `requirements.txt` is retained as that historical pin list; it is not the
+RunPod/Python 3.12 dependency set.
 
 # Old Version (abandon)
 ```
