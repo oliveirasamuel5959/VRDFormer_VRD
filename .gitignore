@@ -9,6 +9,9 @@ __pycache__/
 .ipynb_checkpoints/
 .vscode/
 .idea/
+.venv/
+.env/
+.env
 *.egg-info/
 build/
 dist/

@@ -36,12 +36,12 @@ def get_args_parser():
     parser.add_argument("--ema", action="store_true")
     parser.add_argument("--ema_decay", type=float, default=0.9998)
     parser.add_argument("--fraction_warmup_steps", default=0.01, type=float, help="Fraction of total number of steps")
-    
+
     # Model parameters
     parser.add_argument('--frozen_weights', type=str, default=None,
                         help="Path to the pretrained model. If set, only the mask head will be trained")
     parser.add_argument('--roi_pool_type', default="avg", type=str)
-    
+
     # Backbone
     parser.add_argument("--backbone", default="resnet101", type=str, help="Name of the convolutional backbone")
     parser.add_argument('--dilation', action='store_true', help="If true, we replace stride with dilation in the last convolutional block (DC5)")
@@ -56,7 +56,7 @@ def get_args_parser():
     parser.add_argument("--nheads", default=8, type=int, help="Number of attention heads inside the transformer's attentions")
     parser.add_argument("--num_queries", default=100, type=int, help="Number of object tokens")
     parser.add_argument("--pre_norm", action="store_true")
-    
+
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false', help="Disables auxiliary decoding losses (loss at each layer)")
 
@@ -85,18 +85,18 @@ def get_args_parser():
     # Distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", help="url used to set up distributed training")
-    parser.add_argument('--local_rank', default=-1, type=int) 
-    
+    parser.add_argument('--local-rank', default=-1, type=int)
+
     # VidVRD
     parser.add_argument("--stage", type=int, default=2)
-    parser.add_argument("--coco_path", type=str, default="")
-    parser.add_argument("--vidvrd_path", default="", type=str)
+    parser.add_argument("--coco-path", type=str, default="")
+    parser.add_argument("--vidvrd-path", default="", type=str)
     parser.add_argument("--num_verb_classes", default=132, type=int)
     parser.add_argument("--num_obj_classes", default=35, type=int)
     parser.add_argument("--max_duration", default=24, type=int)
     parser.add_argument("--seq_len", default=8, type=int)
     parser.add_argument("--resolution", default="large", type=str)
-    
+
     # Matcher
     parser.add_argument('--set_cost_class', default=1, type=float, help="Class coefficient in the matching cost")
     parser.add_argument('--set_cost_bbox', default=5, type=float, help="L1 box coefficient in the matching cost")
@@ -104,14 +104,14 @@ def get_args_parser():
     parser.add_argument('--set_cost_sub_class', default=0.5, type=float, help="Object class coefficient in the matching cost")
     parser.add_argument('--set_cost_obj_class', default=0.5, type=float, help="Object class coefficient in the matching cost")
     parser.add_argument('--set_cost_verb_class', default=1, type=float, help="Verb class coefficient in the matching cost")
-    
+
     # Loss coefficients
     parser.add_argument("--obj_loss_coef", default=1, type=float)
     parser.add_argument("--verb_loss_coef", default=1, type=float)
     parser.add_argument('--bbox_loss_coef', default=5, type=float)
     parser.add_argument('--giou_loss_coef', default=2, type=float)
     parser.add_argument("--eos_coef", default=0.1, type=float, help="Relative classification weight of the no-object class")
-    
+
     # Tracking
     parser.add_argument("--tracking", default=False)
     parser.add_argument("--track_prev_frame_range", default=0, type=int)
@@ -123,7 +123,7 @@ def get_args_parser():
     parser.add_argument("--track_prev_prev_frame", default=False)
     parser.add_argument("--track_backprop_prev_frame", default=False)
     parser.add_argument("--track_attention", action="store_true")
-    
+
     # Deformable
     parser.add_argument("--deformable", action="store_true")
     parser.add_argument("--num_feature_levels", default=1, type=int)
@@ -138,14 +138,14 @@ def get_args_parser():
     parser.add_argument("--focal_loss", default=False)
     parser.add_argument("--focal_alpha", default=0.25, type=float)
     parser.add_argument("--focal_gamma", default=2, type=float)
-    
+
     return parser
 
 
 def main(args):
     # Init distributed mode
     dist.init_distributed_mode(args)
-    
+
     # Update dataset specific configs
     if args.dataset_config is not None:
         # https://stackoverflow.com/a/16878364
@@ -169,14 +169,14 @@ def main(args):
     else:
         from engine import train_stage2 as train_one_epoch
         from engine import eval_stage2 as eval_one_epoch
-    
+
     output_dir = Path(args.output_dir)
     if args.output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
         json.dump(vars(args), open(output_dir / 'config.json', 'w'))
-    
+
     # fix the seed for reproducibility
-    seed = args.seed + dist.get_rank()  
+    seed = args.seed + dist.get_rank()
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -186,41 +186,41 @@ def main(args):
     torch.backends.cudnn.benchmark = args.benchmark
     if hasattr(torch, 'set_deterministic'):  # removed in torch 2.0; newer torch skips this
         torch.set_deterministic(True)
-    
+
     model, model_without_ddp, criterion, n_parameters = model_initializer(args, device)
-    
+
     #visualizers = build_visualizers(args, list(criterion.weight_dict.keys()))
-    
+
     # Set up optimizers
     optimizer = optim_initializer(args, model_without_ddp)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
     param_initializer(args, model_without_ddp, optimizer, lr_scheduler)
     data_loader_train, sampler_train, data_loader_val = dataloader_initializer(args)
-    
+
     if args.eval:
         assert args.stage == 2, "Eval mode is only supported for stage 2"
         test_stats = eval_one_epoch(model, data_loader_val, device, 0, args)
         print(test_stats)
         return
-    
+
     print("Start training")
     start_time = time.time()
-    
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             sampler_train.set_epoch(epoch)
-            
+
         train_stats = train_one_epoch(
             model, criterion, data_loader_train, optimizer, device, epoch, args)
 
         lr_scheduler.step()
-        
+
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
             # extra checkpoint before LR drop and every 100 epochs
             if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 1 == 0:
                 checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
-            
+
             for checkpoint_path in checkpoint_paths:
                 save_on_master({
                     'model': model_without_ddp.state_dict(),
@@ -229,7 +229,7 @@ def main(args):
                     'epoch': epoch,
                     'args': args,
                 }, checkpoint_path)
-        
+
         if args.stage == 2:
             test_stats = eval_one_epoch(model, data_loader_val, device, epoch, args)
             print(test_stats)
@@ -239,7 +239,7 @@ def main(args):
         if args.output_dir and dist.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
-        
+
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
@@ -248,7 +248,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("VRDFormer training and evaluation script", parents=[get_args_parser()])
     args = parser.parse_args()
-    
+
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-    
+
     main(args)
