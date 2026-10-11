@@ -111,7 +111,7 @@ def get_rank():
         return 0
     return dist.get_rank()
 
-        
+
 def setup_for_distributed(is_master):
     """
     This function disables printing when not in master process
@@ -131,7 +131,7 @@ def setup_for_distributed(is_master):
 def init_distributed_mode(args):
     """Initialize distributed training, if appropriate"""
     from datetime import timedelta
-    
+
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ["WORLD_SIZE"])
@@ -141,19 +141,30 @@ def init_distributed_mode(args):
         args.gpu = args.rank % torch.cuda.device_count()
     else:
         print("Not using distributed mode")
-        
+
         args.distributed = False
         return
-    
+
     args.distributed = True
 
     torch.cuda.set_device(args.gpu)
     args.dist_backend = "nccl"
-    print("| distributed init (rank {}): {}".format(args.rank, args.dist_url), flush=True)
+    # print("| distributed init (rank {}): {}".format(args.rank, args.dist_url), flush=True)
+    print(f"[rank {args.rank}] before init_process_group (GPU {args.gpu}, world_size={args.world_size})", flush=True)
 
     dist.init_process_group(
-        backend=args.dist_backend, init_method=args.dist_url, world_size=args.world_size, rank=args.rank, timeout=timedelta(days=10),
+        backend=args.dist_backend,
+        init_method=args.dist_url,
+        world_size=args.world_size,
+        rank=args.rank,
+        timeout=timedelta(minutes=2),
+        device_id=torch.device("cuda", args.gpu),
     )
 
-    dist.barrier()
+    print(f"[rank {args.rank}] init_process_group completed", flush=True)
+
+    print(f"[rank {args.rank}] entering barrier", flush=True)
+    dist.barrier(device_ids=[args.gpu])
+    print(f"[rank {args.rank}] barrier completed", flush=True)
+
     setup_for_distributed(args.rank == 0)
