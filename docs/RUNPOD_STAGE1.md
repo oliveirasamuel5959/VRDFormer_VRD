@@ -6,22 +6,22 @@ This guide moves the setup recorded in [`notebooks/vrdformer.ipynb`](../notebook
 
 The notebook recorded this working GPU environment:
 
-| Component | Version observed |
-| --- | --- |
-| CPython | 3.12.3 |
-| PyTorch | 2.8.0+cu128 |
-| Torchvision | 0.23.0+cu128 |
-| PyTorch CUDA build | 12.8 |
-| NumPy | 1.26.4 |
-| Cython | 3.0.12 |
-| decord | 0.6.0 |
-| timm | 1.0.30 |
-| SciPy | 1.17.1 |
-| lap | 0.5.13 |
-| pycocotools | 2.0.11 |
-| OpenCV (headless) | 4.11.0.86 |
-| Pillow | 11.0.0 |
-| tqdm | 4.70.1 |
+| Component          | Version observed |
+| ------------------ | ---------------- |
+| CPython            | 3.12.3           |
+| PyTorch            | 2.8.0+cu128      |
+| Torchvision        | 0.23.0+cu128     |
+| PyTorch CUDA build | 12.8             |
+| NumPy              | 1.26.4           |
+| Cython             | 3.0.12           |
+| decord             | 0.6.0            |
+| timm               | 1.0.30           |
+| SciPy              | 1.17.1           |
+| lap                | 0.5.13           |
+| pycocotools        | 2.0.11           |
+| OpenCV (headless)  | 4.11.0.86        |
+| Pillow             | 11.0.0           |
+| tqdm               | 4.70.1           |
 
 The installer requires the matching Python/Torch/Torchvision/CUDA versions above and checks that a RunPod GPU is visible. Use a RunPod image that already contains this CUDA-enabled PyTorch build and a compatible NVIDIA driver. It intentionally does **not** install or replace PyTorch. The Python dependency pins are in [`requirements-runpod-stage1.txt`](../requirements-runpod-stage1.txt).
 
@@ -30,6 +30,16 @@ The installer requires the matching Python/Torch/Torchvision/CUDA versions above
 ## Install from the pod shell
 
 Open a terminal/SSH session **inside the running RunPod pod** (not the local workstation or `runpodctl` management CLI). Clone the repository if it is not already on the pod, then run the setup script from the checkout:
+
+```bash
+python3.12 -m venv ./.venv
+```
+
+```bash
+python -m pip install \
+  torch==2.8.0 torchvision==0.23.0 \
+  --index-url https://download.pytorch.org/whl/cu128
+```
 
 ```bash
 git clone https://github.com/oliveirasamuel5959/VRDFormer_VRD.git
