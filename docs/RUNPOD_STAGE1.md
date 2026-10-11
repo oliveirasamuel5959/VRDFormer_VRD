@@ -106,3 +106,11 @@ NPROC_PER_NODE=2 sh scripts/stage1/train_vidorsmall.sh
 ```
 
 The wrapper uses `configs/vidorsmall_stage1.json`, `--num_queries 200`, `--lr 5e-5`, and `--lr_backbone 1e-5`. Start with `NPROC_PER_NODE=1` if only one GPU is allocated. Training requires the data and checkpoint files listed above; successful dependency checks alone do not mean the run is ready.
+
+## After Stage-1 training transfer ckpts
+
+```bash
+scp -rv -P PORT -i ~/.ssh/id_ed25519 \
+  root@194.68.245.46:/root/VRDFormer_VRD/data/ckpts/ \
+  /home/samuel/projects/VRDFormer_VRD/data/
+```
