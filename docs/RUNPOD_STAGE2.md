@@ -97,9 +97,10 @@ NPROC_PER_NODE=1 sh scripts/stage2/train_vidorsmall.sh
 ```
 
 The wrapper uses `configs/vidorsmall_stage2.json` with `--num_queries 200`, `--lr 5e-5`, and
-`--lr_backbone 1e-5`. Remember the config JSON is loaded over the command-line defaults
-(`main.py:150-155`), so edit the JSON — not the flags — to change `batch_size`, `epochs`, `seq_len`,
-`pretrain`, `output_dir`, etc.
+`--lr_backbone 1e-5`. It also derives `--accumulate_steps` from `NPROC_PER_NODE` to keep the
+effective batch at ~4 clips/optimizer step (`NPROC=1 → 4`, `NPROC=2 → 2`, `NPROC≥4 → 1`).
+Remember the config JSON is loaded over the command-line defaults (`main.py:150-155`), so edit the
+JSON — not the flags — to change `batch_size`, `epochs`, `seq_len`, `pretrain`, `output_dir`, etc.
 
 Key settings in `configs/vidorsmall_stage2.json`:
 
@@ -109,13 +110,20 @@ Key settings in `configs/vidorsmall_stage2.json`:
 | `pretrain` | `data/ckpts/vidorsmall_stage1/checkpoint0001.pth` | Stage-1 weights to initialize from |
 | `output_dir` | `data/ckpts/vidorsmall_stage2` | new checkpoint directory |
 | `seq_len` | `8` | frames sampled per clip |
-| `batch_size` | `4` | clips per step |
+| `batch_size` | `1` | clips per forward/backward (8 frames each) |
+| `accumulate_steps` | derived from `NPROC_PER_NODE` | gradient accumulation; keeps effective batch ~4 clips/optimizer step |
 | `epochs` / `lr_drop` | `2` / `1` | 2 epochs, LR drops after every epoch |
 | `train_clip_sample_ratio` | `0.25` | trains on every 4th clip |
 | `amp` / `benchmark` | `true` | bf16 autocast on Ampere+, cudnn autotune |
 
 Notes:
 
+- Stage 2 keeps the autograd graph alive across **all** `seq_len` frames of a clip (the per-pair
+  `memory` embeddings are concatenated without `detach()` in training), so peak memory scales with
+  `batch_size × seq_len`. `batch_size: 1` (8 image-equivalents at once) is what fits a 48 GB GPU;
+  `--accumulate_steps` (derived from `NPROC_PER_NODE`) restores an effective batch of ~4 clips per
+  optimizer step. Raising `batch_size` without lowering `seq_len` or `resolution` (default `"large"`)
+  will OOM again.
 - Because `stage == 2`, `main.py` also calls `eval_stage2` **after every epoch** (`main.py:233-234`)
   and logs it. That eval scans the full train annotations to compute `zeroshot_triplets`
   (`dataloader_initializer`), so the val-loader startup is slow — minutes of no iteration output is

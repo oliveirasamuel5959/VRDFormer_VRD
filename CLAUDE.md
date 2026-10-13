@@ -105,7 +105,7 @@ the model class, the criterion, and the training loop simultaneously.
 - No tracking, no matcher, no box losses. Queries are **initialized from ground-truth boxes**:
   `Transformer.extract_roi_feat` does `roi_align` on the encoder input at `unscaled_{sub,obj}_boxes`,
   fuses s/o features through `so_linear`, and `prepare_tag_query` pads to `num_queries`.
-- `batch_size` > 1 is supported (config sets 4): the collate packs clips as `(b,t,c,h,w)`
+- `batch_size` > 1 is supported (the collate packs clips as `(b,t,c,h,w)`
   NestedTensors (`util/misc.py` video branch of `from_tensor_list`), the training loop feeds one
   frame per clip per step (`samples.select_frame(fid)` for `fid in range(seq_len)`), and threads a
   **list of B per-clip `memory` dicts** through the frames. The val loader is forced to batch 1
@@ -114,7 +114,10 @@ the model class, the criterion, and the training loop simultaneously.
   `s_embed`, `o_embed`, labels, and (eval only) `frame_ids`. At `eos` each clip's sequence is
   mean-pooled per pair and pushed through `relation_classifier` → per-clip losses are summed over
   the batch (preserves batch-1 gradient scale; no LR change needed).
-- Loss is computed once per clip on the accumulated memory, not per frame.
+- Loss is computed once per clip on the accumulated memory, not per frame. Because the graph is
+  never detached between frames, peak memory scales with `batch_size × seq_len`; the mem-constrained
+  `configs/vidorsmall_stage2.json` therefore uses `batch_size: 1`, with `--accumulate_steps` scaled
+  from `NPROC_PER_NODE` (see `scripts/stage2/train_vidorsmall.sh`) to hold the effective batch ~4.
 
 Shared plumbing: `models/__init__.py:build_model` is the single place that wires backbone +
 (deformable or vanilla) transformer + model class + criterion + `weight_dict` per stage.
