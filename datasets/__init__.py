@@ -91,18 +91,26 @@ def dataloader_initializer(args):
     batch_sampler_train = torch.utils.data.BatchSampler(
         sampler_train, args.batch_size, drop_last=True)
 
+    # `timeout` turns a wedged DataLoader worker (e.g. a forked worker deadlocking
+    # on inherited CUDA/NCCL or decord state) into a loud RuntimeError instead of a
+    # silent infinite hang. `persistent_workers` is only valid when num_workers > 0.
+    loader_kwargs = dict(
+        collate_fn=utils.collate_fn,
+        num_workers=args.num_workers,
+        timeout=300 if args.num_workers > 0 else 0,
+        persistent_workers=args.num_workers > 0,
+    )
+
     data_loader_train = DataLoader(
         dataset_train,
         batch_sampler=batch_sampler_train,
-        collate_fn=utils.collate_fn,
-        num_workers=args.num_workers)
+        **loader_kwargs)
 
     data_loader_val = DataLoader(
         dataset_val,
         1,  # val clips have variable frame counts; eval stays per-video (no clip batching)
         sampler=sampler_val,
         drop_last=False,
-        collate_fn=utils.collate_fn,
-        num_workers=args.num_workers)
+        **loader_kwargs)
     
     return data_loader_train, sampler_train, data_loader_val
