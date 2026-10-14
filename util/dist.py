@@ -8,6 +8,7 @@ If you want to reduce on CPU instead (required for big datasets like GQA), use t
 """
 import functools
 import subprocess
+import builtins
 import io
 import os
 
@@ -16,6 +17,23 @@ import torch.distributed as dist
 from datetime import timedelta
 
 _LOCAL_PROCESS_GROUP = None
+
+# Captured at import time, i.e. before setup_for_distributed() may replace
+# builtins.print with a rank-0-only version. Used by print_all_ranks().
+_BUILTIN_PRINT = builtins.print
+
+
+def print_all_ranks(*args, **kwargs):
+    """Like print(), but works from every rank.
+
+    ``setup_for_distributed`` swaps ``builtins.print`` for a version that silently drops
+    output on ranks != 0. That hides exactly the diagnostics that matter when a
+    distributed run goes wrong (a rank-local failure the others are waiting on), so
+    error paths use this helper instead. It goes through the captured original print, so
+    it is also safe when setup_for_distributed was never called (single-process runs).
+    """
+    kwargs.setdefault("flush", True)
+    _BUILTIN_PRINT(*args, **kwargs)
 
 
 def is_dist_avail_and_initialized():

@@ -1,25 +1,38 @@
 import torch
 import math
-import sys
 import datetime
 import util.misc as utils
 from util.misc import NestedTensor, target_to_cuda
-from util.dist import reduce_dict
+from util.dist import reduce_dict, get_rank, print_all_ranks
 from util.box_ops import debug_and_vis
 from util.evaluate import evaluate
 
-def is_loss_invalid(loss):
-    """
-    Determine whether the loss is NaN (not a number).
+
+def is_loss_invalid(loss, synced_value=None):
+    """Abort the whole run if the loss is not finite.
+
     Args:
-        loss (loss): loss to check whether is NaN.
+        loss: this rank's local loss scalar, before the accumulate_steps division.
+        synced_value: the same loss after ``reduce_dict``, i.e. averaged over all ranks.
+
+    A non-finite loss on any one rank survives ``reduce_dict``'s all_reduce (NaN/inf
+    propagate through a sum), so passing that reduced value lets *every* rank detect it
+    and raise together. The previous version raised/``sys.exit(1)``-ed on the offending
+    rank alone; because ``setup_for_distributed`` replaces ``print`` with a no-op on
+    ranks != 0, that rank vanished silently and the others stayed blocked forever in the
+    next collective. Raising on all ranks lets the launcher tear the job down loudly.
     """
-    loss_value = loss.item()
-    if math.isnan(loss_value):
-        raise RuntimeError("ERROR: Got NaN losses {}".format(datetime.datetime.now()))
-    if not math.isfinite(loss_value):
-        print(f"Loss is {loss_value}, stopping training")
-        sys.exit(1)
+    local = loss.item()
+    bad = not math.isfinite(local)
+    if synced_value is not None and not math.isfinite(synced_value):
+        bad = True
+    if not bad:
+        return
+    # print_all_ranks escapes setup_for_distributed's suppression of output on ranks != 0.
+    print_all_ranks(f"[rank {get_rank()}] non-finite loss at {datetime.datetime.now()}: "
+                    f"local={local!r} global={synced_value!r} -- aborting all ranks")
+    raise RuntimeError(
+        f"non-finite loss on rank {get_rank()}: local={local}, global={synced_value}")
 
 
 def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
@@ -77,7 +90,6 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
             weight_dict = criterion.weight_dict
 
             losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
-        is_loss_invalid(losses)
 
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = reduce_dict(loss_dict)
@@ -88,6 +100,10 @@ def train_stage2(model, criterion, data_loader, optimizer, device, epoch, args):
         losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
         loss_value = losses_reduced_scaled.item()
 
+        # Checked *after* reduce_dict: a non-finite loss on one rank survives the
+        # all_reduce, so all ranks observe it and abort together instead of one rank
+        # exiting while the rest block forever in the next collective.
+        is_loss_invalid(losses, synced_value=loss_value)
 
         losses = losses / args.accumulate_steps
         if scaler.is_enabled():
@@ -174,8 +190,7 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
-        is_loss_invalid(losses)
-        
+
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = reduce_dict(loss_dict)
         loss_dict_reduced_unscaled = {f'{k}_unscaled': v
@@ -185,7 +200,10 @@ def train_stage1(model, criterion, data_loader, optimizer, device, epoch, args):
         losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
         loss_value = losses_reduced_scaled.item()
 
-
+        # Same group-wide abort as train_stage2: one rank exiting alone leaves the rest
+        # blocked in the next collective, with its message hidden by
+        # setup_for_distributed on ranks != 0.
+        is_loss_invalid(losses, synced_value=loss_value)
 
         losses = losses / args.accumulate_steps
         losses.backward()
