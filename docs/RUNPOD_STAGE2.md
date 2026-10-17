@@ -114,16 +114,33 @@ Key settings in `configs/vidorsmall_stage2.json`:
 | `accumulate_steps` | derived from `NPROC_PER_NODE` | gradient accumulation; keeps effective batch ~4 clips/optimizer step |
 | `epochs` / `lr_drop` | `2` / `1` | 2 epochs, LR drops after every epoch |
 | `train_clip_sample_ratio` | `0.25` | trains on every 4th clip |
-| `amp` / `benchmark` | `true` | bf16 autocast on Ampere+, cudnn autotune |
+| `resolution` | `"small"` | `make_video_transforms` preset: shortest side 288–480, max 800 |
+| `amp` | `true` | bf16 autocast on Ampere+ |
+| `benchmark` | `false` | see the cudnn note below |
 
 Notes:
 
+- **`resolution` is the dominant throughput knob in stage 2.** VidOR videos are natively 640×360,
+  500×375, 320×240, … The transform upscales them regardless: the `"large"` default (shortest side
+  480–800) averages ~729k px **per frame in every one of the `seq_len` frames**, i.e. ~3.2× the
+  native 230k px, while `"small"` averages ~262k px (~1.1× native). Since the ResNet-101 backbone is
+  ~93% of per-frame FLOPs and scales with pixel area, `"small"` is roughly a **2.8× speedup** over
+  `"large"` on this data — and it does not discard detail the source videos ever had. It does change
+  the input scale the model sees, so it is a deliberate accuracy/throughput trade; revert to
+  `"middle"` or `"large"` if accuracy regresses.
+- **`benchmark: false`**: `main.py:185-186` maps this to `torch.backends.cudnn.benchmark`. Training
+  resizes every frame to a random size from the scale list, and VidOR clips carry several aspect
+  ratios (640×360, 640×480, 500×375, 640×1138, …), so autotuning pays a full conv search on nearly
+  every iteration and rarely reuses it. Turn it back on only if you fix the input size.
+- `num_queries 200` is **not** a throughput lever here: the decoder is ~2.1 GFLOP of ~121 GFLOP per
+  frame, so 200→64 saves ~1%. It would also break `pretrain` loading — the stage-1 checkpoint stores
+  `query_embed.weight` shaped `(200, 512)`, and `resume_stage2` only half-slices, so
+  `load_state_dict(strict=False)` still raises on a size mismatch.
 - Stage 2 keeps the autograd graph alive across **all** `seq_len` frames of a clip (the per-pair
   `memory` embeddings are concatenated without `detach()` in training), so peak memory scales with
   `batch_size × seq_len`. `batch_size: 1` (8 image-equivalents at once) is what fits a 48 GB GPU;
   `--accumulate_steps` (derived from `NPROC_PER_NODE`) restores an effective batch of ~4 clips per
-  optimizer step. Raising `batch_size` without lowering `seq_len` or `resolution` (default `"large"`)
-  will OOM again.
+  optimizer step. Lower `resolution` before raising `batch_size`.
 - Because `stage == 2`, `main.py` also calls `eval_stage2` **after every epoch** (`main.py:233-234`)
   and logs it. That eval scans the full train annotations to compute `zeroshot_triplets`
   (`dataloader_initializer`), so the val-loader startup is slow — minutes of no iteration output is

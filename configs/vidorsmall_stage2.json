@@ -21,5 +21,6 @@
   "batch_size": 1,
   "train_clip_sample_ratio": 0.25,
   "amp": true,
-  "benchmark": true
+  "benchmark": false,
+  "resolution": "small"
 }
