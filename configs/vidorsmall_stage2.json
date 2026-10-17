@@ -22,5 +22,5 @@
   "train_clip_sample_ratio": 0.25,
   "amp": true,
   "benchmark": false,
-  "resolution": "small"
+  "resolution": "large"
 }
