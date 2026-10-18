@@ -278,6 +278,103 @@ def pseudo_target_uses_the_given_size():
     assert target["num_inst"] == len(active), target["num_inst"]
 
 
+@check
+def label_style_scales_with_frame_height():
+    from vrdf_inference.render import label_style
+
+    # 240/400 = 0.6, inside the 0.45..1.2 band; 2160 clamps at the top.
+    assert label_style(240) == (0.6, 1), label_style(240)
+    assert label_style(2160)[0] == 1.2, label_style(2160)
+    assert label_style(2160)[1] >= 1, label_style(2160)
+
+
+@check
+def renderers_always_write_a_playable_video():
+    """Both renderers, including the zero-detection path, must produce a real video."""
+    import argparse
+    import tempfile
+    from pathlib import Path
+
+    import cv2
+
+    from vrdf_inference.render import render_detections, render_triplets
+
+    def frame_count(path):
+        reader = cv2.VideoCapture(str(path))
+        assert reader.isOpened(), f"{path} is not readable"
+        count = 0
+        while True:
+            ok, _ = reader.read()
+            if not ok:
+                break
+            count += 1
+        reader.release()
+        return count
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        src = tmp / "in.mp4"
+        writer = cv2.VideoWriter(
+            str(src), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (64, 48)
+        )
+        for i in range(5):
+            writer.write(np.full((48, 64, 3), i * 10, dtype=np.uint8))
+        writer.release()
+
+        meta = {
+            "video_id": "synthetic",
+            "fps": 10.0,
+            "source_width": 64,
+            "source_height": 48,
+            "num_decoded_frames": 5,
+        }
+        args = argparse.Namespace(
+            every_n_frames=1,
+            max_frames=None,
+            decode_chunk=8,
+            max_labels_per_frame=2,
+            obj_names=["a"] * 80,
+        )
+        det = {
+            "sub_cls": 5,
+            "obj_cls": 7,
+            "sub_score": 0.2,
+            "obj_score": 0.15,
+            "pair_score": 0.15,
+            "box_px_sub": [4.0, 4.0, 30.0, 30.0],
+            "box_px_obj": [20.0, 10.0, 50.0, 40.0],
+        }
+        prediction = {
+            "track_id": "0-0",
+            "subject": "adult",
+            "verb": "next_to",
+            "object": "table",
+            "score": 0.3,
+            "frames": [0, 1, 2, 3, 4],
+            "observed_frames": [0, 1, 2, 3, 4],
+            "sub_boxes": [[4.0, 4.0, 30.0, 30.0]] * 5,
+            "obj_boxes": [[20.0, 10.0, 50.0, 40.0]] * 5,
+        }
+
+        cases = {
+            "detections": lambda p: render_detections(
+                str(src), p, [[det]] * 5, meta, args
+            ),
+            "detections-empty": lambda p: render_detections(
+                str(src), p, [[]] * 5, meta, args
+            ),
+            "triplets": lambda p: render_triplets(
+                str(src), p, [prediction], meta, args
+            ),
+            "triplets-empty": lambda p: render_triplets(str(src), p, [], meta, args),
+        }
+        for name, run in cases.items():
+            out = tmp / f"{name}.mp4"
+            run(out)
+            assert out.exists() and out.stat().st_size > 0, f"{name} wrote no video"
+            assert frame_count(out) == 5, f"{name}: wrong frame count"
+
+
 def main():
     failed = 0
     for fn in CHECKS:
