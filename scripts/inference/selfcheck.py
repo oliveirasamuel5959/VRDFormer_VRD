@@ -461,6 +461,50 @@ def stage2_payload_records_both_stage_sizes():
     assert payload["thresholds"]["min_score"] == 0.05, payload["thresholds"]
 
 
+@check
+def checkpoint_wins_on_resolution():
+    """The checkpoint outranks the config for resolution only; everything else stays config-wins."""
+    import argparse
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from vrdf_inference.cli import resolve_stage_args
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # The real configs set resolution but omit num_queries -- that omission is exactly why the
+        # checkpoint's num_queries survives. Model both cases.
+        config = Path(tmpdir) / "c.json"
+        config.write_text(json.dumps({"resolution": "large", "conf_sub": 0.15}))
+
+        base = argparse.Namespace(
+            resolution="large", num_queries=100, conf_sub=0.5, seed=42
+        )
+        ckpt = {"resolution": "small", "num_queries": 200}
+
+        # The checkpoint outranks the config for resolution...
+        resolved = resolve_stage_args(base, str(config), ckpt, {})
+        assert resolved.resolution == "small", resolved.resolution
+        # ...the config still beats the argparse default for keys it does set...
+        assert resolved.conf_sub == 0.15, resolved.conf_sub
+        # ...and a key the config omits keeps the checkpoint's value, not argparse's.
+        assert resolved.num_queries == 200, resolved.num_queries
+
+        # A checkpoint that does not store resolution leaves the config's value alone.
+        resolved = resolve_stage_args(base, str(config), {"num_queries": 200}, {})
+        assert resolved.resolution == "large", resolved.resolution
+
+        # An explicit CLI override beats the checkpoint.
+        resolved = resolve_stage_args(
+            base, str(config), ckpt, {"resolution": "large", "dataset": None}
+        )
+        assert resolved.resolution == "large", resolved.resolution
+
+        # No checkpoint args at all: the config wins as before.
+        resolved = resolve_stage_args(base, str(config), None, {})
+        assert resolved.resolution == "large", resolved.resolution
+
+
 def main():
     failed = 0
     for fn in CHECKS:
