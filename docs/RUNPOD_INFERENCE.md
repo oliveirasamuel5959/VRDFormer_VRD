@@ -4,8 +4,10 @@ This guide describes how to run the trained VRDFormer on an **arbitrary video th
 VidOR/VidVRD** and produce relation-triplet predictions. It follows the
 `video → Stage 1 (detection) → Stage 2 (relation) → triplets` pipeline.
 
-> **Status:** design only — `inference.py` does not exist yet. This document is the plan to implement
-> it. It continues from [`RUNPOD_STAGE2.md`](RUNPOD_STAGE2.md), which trains and evaluates Stage 2.
+> **Status: implemented.** `inference.py` exists at the repository root; this document was the plan
+> for it and is kept as the design record. It continues from [`RUNPOD_STAGE2.md`](RUNPOD_STAGE2.md),
+> which trains and evaluates Stage 2. See "Implementation notes" at the end for where the code
+> departs from this plan.
 
 ## Why a new script is needed
 
@@ -88,8 +90,14 @@ OUTPUT: results.json  (per-tracklet triplets)
 
 Suggested location: **`inference.py` at the repository root** (single file; the pipeline is short
 enough to keep in one place, and the repo has no `tools/` convention beyond one-off repro scripts).
+As built: `inference.py` stays at the root and `scripts/inference/inference.sh` is the launcher,
+matching the `.sh`-in-`scripts/` convention of the training wrappers.
 
 ### CLI
+
+The planned invocation. The implemented CLI keeps these flag names, adds the flags listed under
+"Implementation notes", and drops `--output` in favour of `--output_dir` + a per-video
+subdirectory (see "Output" below).
 
 ```bash
 python inference.py \
@@ -245,6 +253,141 @@ For **per-frame** verb predictions, apply `verb_class_embed[-1]` to each frame's
    `util/evaluate.py`. Adding `sub_traj`/`obj_traj`/`duration` to each prediction also enables the
    detection mAP/recall branch (`util/evaluate.py:98`), which is otherwise skipped.
 4. **Run on the new unlabeled mp4** — write `results.json`.
+
+## Implementation notes (where the code departs from this plan)
+
+Measured on the CPU workstation against `data/vidorsmall/videos/10042935613.mp4` (a val video with
+GT boxes and triplets), 8–12 decoded frames.
+
+1. **The CLI no longer reuses `main.get_args_parser()`'s `--dataset_config`.** It is replaced with
+   `conflict_handler="resolve"`, because inference names two configs (`--stage1_config`,
+   `--stage2_config`) and loads no dataloader.
+2. **Config resolution order is argparse defaults < checkpoint's saved args < config JSON < explicit
+   CLI overrides.** The plan said "config JSON wins, exactly as `main.py` does", but neither
+   vidorsmall config sets `num_queries`, so the argparse default (100) would win over the
+   checkpoint's 200 and the state_dict load would fail. The checkpoint's args are also the only
+   record of the *training* `resolution`, which is reported when it disagrees with the config.
+3. **Stage 1 keeps the previous frame's backbone features** (`prev_features`) because the checkpoint
+   is `multi_frame_attention: true`. Measured effect at `--conf_sub/--conf_obj 0.15`: 34 vs 22
+   detections on frame 1.
+4. **Class equality is not part of the tracklet association cost** (`--cls_gate motion`, the
+   default). The plan's "IoU > iou_thresh AND class matches" was implemented and measured: the
+   detector's argmax class flips between frames, so gating on it produced 93 single-frame tracklets
+   out of 142 (mean length 1.35). Matching on box motion and voting the classes back
+   (`--cls_vote keep`) gives 47 of 111 (mean 2.02). `--cls_gate same` restores the plan's behaviour.
+5. **Triplet `score` is the sigmoid verb probability**, not the raw logit maximum
+   (`engine.eval_stage2`'s convention), and tracklets below `--min_score` (default 0.05) are dropped.
+6. **Threshold defaults are calibrated, not the plan's `--conf_sub/--conf_obj 0.5`.** The checkpoint's
+   best pre-threshold pair score is ~0.19, so 0.5 yields *zero* detections on every frame. The
+   defaults are 0.15, and each run prints the best pre-threshold subject/object/pair score so the
+   value can be set from data. Reference measurements at 0.15: localisation recall 0.41 @IoU 0.50,
+   0.59 @IoU 0.30, 0.25 with the correct class at IoU 0.50.
+7. **The detector loses objects over time.** Mean best pair score falls from ~0.18 (frame 0) to
+   ~0.09 by frame 4 at stride 5, after which some frames have no detections at all. `--max_gap` can
+   bridge *missed* detections but not frames with none, so this — not the association — is what
+   keeps predicted tracklets short.
+8. **`sub_traj`/`obj_traj` are source-frame aligned, with a sidecar for evaluation.**
+   `util.evaluate.viou` indexes both trajectories on the same grid, so decoded-axis trajectories
+   cannot be scored against ground truth. The JSON carries `sub_boxes`/`obj_boxes` on the decoded
+   axis and `sub_traj`/`obj_traj` expanded to every source frame in
+   `source_duration = [start, end)`. `write_eval_prediction` emits `eval_prediction.json` in
+   `evaluate_visual_relation`'s `prediction` shape. Scores against GT are 0 with these checkpoints,
+   but the triplet names are the binding constraint (Stage 2 predicts `next_to` for nearly every
+   pair, and GT verbs here are `hold`/`use`/`watch`/`in_front_of`/`behind`/`away`), not the boxes.
+9. **Mismatches between a config and its checkpoint are reported, never silently applied.** An
+   *architecture* key that differs (`num_queries`, `position_embedding`, …) usually means the
+   state_dict load will fail or the network will compute something else; a `resolution` difference
+   loads and runs but predicts at a scale the weights never saw. `data/ckpts/vidorsmall_stage2/`
+   currently hits the latter: the checkpoint's saved args say `resolution: "small"` while
+   `configs/vidorsmall_stage2.json` says `"large"`, so pass `--stage2_resolution small` to match the
+   weights.
+
+## Running it
+
+`scripts/inference/inference.sh` is the launcher. It resolves the interpreter (an activated venv,
+else the project `.venv`), picks `--device cuda` only when `nvidia-smi` works, and defaults
+`--stage2_resolution small` to match the weights. Every flag after the video path goes straight to
+`inference.py`.
+
+```bash
+source .venv/bin/activate
+sh scripts/inference/inference.sh /path/to/video.mp4
+```
+
+Then read the output. The script defaults the checkpoints and both configs to the vidorsmall pair,
+so the video path is the only required argument.
+
+### Output
+
+For `<video_id>` = the input file's stem, and `<output_dir>` defaulting to
+`output/inference/<dataset>`:
+
+```
+<output_dir>/<video_id>/
+├── results.json          # triplets, tracklets, per-frame detections
+├── eval_prediction.json  # util/evaluate-shaped sidecar
+└── video.mp4             # the input annotated with boxes and triplet labels
+```
+
+**Nothing is written until the whole pipeline finishes** — `results.json` after Stage 2,
+`video.mp4` after rendering. On a long clip at a small `--every_n_frames` that is a long wait with
+no output on disk, so run a short prefix first (`--max_frames 30`) to confirm the thresholds suit
+your video, then launch the full pass. `--output_dir` moves the root.
+
+### Read the `best score before thresholding` line first
+
+This is the one number that decides whether you get any output at all. The vidorsmall Stage-1
+checkpoint is weak, and on a video it has never seen its best pair score is typically **0.08–0.35**.
+The `--conf_sub`/`--conf_obj` defaults are 0.15. If the run reports `0 detections`, the warning prints
+the value that would have worked:
+
+```
+[inference] WARNING: no detection cleared the thresholds; the highest pair score reached was
+0.104 (subject 0.121, object 0.106). Lower --conf_sub/--conf_obj below those values, e.g.
+--conf_sub 0.06 --conf_obj 0.05.
+```
+
+A random video that does not look like VidOR (animation, screencast, gameplay, a test pattern) scores
+lower than real footage — synthetic `ffmpeg testsrc` clips peak around 0.10–0.16 and produce nothing
+at the defaults. That is the model, not the pipeline. Confirm the pipeline works on a vidorsmall clip
+first (`data/vidorsmall/videos/*.mp4`), then point it at your download.
+
+### Container formats
+
+decord ships against FFmpeg and decodes **H.264, HEVC, and VP9** fine; **AV1 fails**, and OpenCV
+cannot decode AV1 either, so there is no in-script fallback. The script now detects this and tells
+you to transcode rather than dumping a decoder traceback:
+
+```bash
+ffmpeg -i downloaded.mp4 -c:v libx264 -pix_fmt yuv420p converted.mp4
+sh scripts/inference/inference.sh converted.mp4
+```
+
+If you download with `yt-dlp`, ask for a compatible codec up front:
+
+```bash
+yt-dlp -f "bv*[vcodec^=avc1]+ba/b[ext=mp4]" -o clip.mp4 <url>
+```
+
+Verified working (on CPU, so a GPU run should be strictly faster): landscape and portrait aspect
+ratios, 23.976 fps, 4K, 3-frame clips, and rotation metadata. Odd fps only affects the output
+video's playback rate; rotation metadata is already applied to the decoded pixels by decord.
+
+### Cost
+
+On this CPU workstation one frame costs roughly 2.6 s in Stage 1 at `--resolution large`, so a
+36-frame run takes ~2.5 minutes; Stage 2 is ~1.1 fps. On the pod's GPU, expect the same count of
+forward passes (2 per decoded frame) plus one extra decode pass if you keep the annotated video
+(`--no_video` skips it). A 1-minute clip at the default `--every_n_frames 5` is ~360 decoded frames
+if it is 30 fps.
+
+### Expected results on a new video
+
+Low. The checkpoints are a 100-video POC subset trained for 2 epochs, Stage 1 is run in a
+static-query regime it was not trained in, and Stage 2 predicts a verb for pairs the detector
+proposed. On vidorsmall's own val split the measured Stage-1 box recall is 0.41 @IoU 0.50 / 0.59
+@IoU 0.30; Stage 2 dominates the verb distribution with a small number of classes, so triplets are
+mostly `adult next_to <thing>`. This is the pipeline working, not the model working.
 
 ## Verification
 
