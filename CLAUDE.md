@@ -46,6 +46,22 @@ sh scripts/stage2/train.sh              # VidVRD stage 2
 sh scripts/stage2/eval_vidorsmall.sh    # stage-2 evaluation with configured checkpoint
 ```
 
+Single-video inference (an arbitrary `.mp4`, no ground truth) is a separate entry point with two
+modes. The pipeline lives in `vrdf_inference/`; `inference.py` at the root is a thin dispatcher.
+
+```bash
+sh scripts/inference/inference.sh stage1 clip.mp4          # detection only, annotated
+sh scripts/inference/inference.sh stage2 clip.mp4          # + triplets, annotated
+# or: python inference.py --video clip.mp4 --mode stage1|stage2
+```
+
+`--mode` is required. **Both modes always write an annotated `video.mp4`** plus a `results.json`
+under `output/inference/<mode>/<video_id>/` — there is no flag to skip the video, and a
+zero-detection run still writes one. `scripts/inference/selfcheck.py` holds the pure-logic checks
+for the package (`python scripts/inference/selfcheck.py`); there is no pytest suite here.
+Stage-2 conflicts between a config and its checkpoint resolve in the checkpoint's favour for
+`resolution` only — see `docs/RUNPOD_INFERENCE.md`.
+
 Set `NPROC_PER_NODE=<gpu_count>` to override the small-subset wrappers' one-GPU default. The main
 training scripts under `scripts/stage1/` and `scripts/stage2/` cover other datasets and deformable
 variants. Deformable variants require a compatible CUDA build of `models/ops`.

@@ -4,10 +4,12 @@ This guide describes how to run the trained VRDFormer on an **arbitrary video th
 VidOR/VidVRD** and produce relation-triplet predictions. It follows the
 `video → Stage 1 (detection) → Stage 2 (relation) → triplets` pipeline.
 
-> **Status: implemented.** `inference.py` exists at the repository root; this document was the plan
-> for it and is kept as the design record. It continues from [`RUNPOD_STAGE2.md`](RUNPOD_STAGE2.md),
-> which trains and evaluates Stage 2. See "Implementation notes" at the end for where the code
-> departs from this plan.
+> **Status: implemented, and split into two modes.** The pipeline lives in the `vrdf_inference/`
+> package; `inference.py` at the repository root is a thin entry point. There are two modes:
+> `--mode stage1` (detection only) and `--mode stage2` (the full pipeline with triplets). Both
+> always write an annotated `video.mp4`. This document was the plan for the single-file version and
+> is kept as the design record; see "Implementation notes" for where the code departs from it, and
+> `docs/superpowers/specs/2026-10-18-inference-modularization-design.md` for the split.
 
 ## Why a new script is needed
 
@@ -304,35 +306,80 @@ GT boxes and triplets), 8–12 decoded frames.
 
 ## Running it
 
-`scripts/inference/inference.sh` is the launcher. It resolves the interpreter (an activated venv,
-else the project `.venv`), picks `--device cuda` only when `nvidia-smi` works, and defaults
-`--stage2_resolution small` to match the weights. Every flag after the video path goes straight to
-`inference.py`.
+`scripts/inference/inference.sh` is the launcher: `<mode> <video> [flags]`. It resolves the
+interpreter (an activated venv, else the project `.venv`), picks `--device cuda` only when
+`nvidia-smi` works, and forwards every flag after the video path straight to `inference.py`.
 
 ```bash
 source .venv/bin/activate
-sh scripts/inference/inference.sh /path/to/video.mp4
+
+# Detection only: boxes + class labels, no relations.
+sh scripts/inference/inference.sh stage1 data/vidorsmall/videos/10042935613.mp4
+
+# Full pipeline: + tracklet association, stage 2, relation triplets.
+sh scripts/inference/inference.sh stage2 data/vidorsmall/videos/10042935613.mp4
 ```
 
-Then read the output. The script defaults the checkpoints and both configs to the vidorsmall pair,
-so the video path is the only required argument.
+Or call the entry point directly, which is the same thing without the venv/device probing:
+
+```bash
+python inference.py --video clip.mp4 --mode stage1
+python inference.py --video clip.mp4 --mode stage2 --every_n_frames 5 --max_frames 120
+```
+
+`--mode` is **required** and has no default, so a cheap detection-only run can never be confused
+with an expensive full run. The checkpoints and both configs default to the vidorsmall pair, so the
+video path and the mode are the only required arguments.
+
+`--no_video` used to exist and is **gone**: the annotated video is a required deliverable of both
+modes, so there is no flag to skip it.
 
 ### Output
 
-For `<video_id>` = the input file's stem, and `<output_dir>` defaulting to
-`output/inference/<dataset>`:
+For `<video_id>` = the input file's stem and `<mode>` = the `--mode` value:
 
 ```
-<output_dir>/<video_id>/
-├── results.json          # triplets, tracklets, per-frame detections
-├── eval_prediction.json  # util/evaluate-shaped sidecar
-└── video.mp4             # the input annotated with boxes and triplet labels
+output/inference/
+├── stage1/<video_id>/                    # --mode stage1
+│   ├── results.json                      # metadata + per-frame detections (no tracklets/triplets)
+│   └── video.mp4                         # detections annotated: subject/object boxes + labels
+└── stage2/<video_id>/                    # --mode stage2
+    ├── results.json                      # + tracklets, predictions, both stages' input sizes
+    ├── eval_prediction.json              # util/evaluate-shaped sidecar
+    └── video.mp4                         # triplets annotated, one colour per tracklet
 ```
 
-**Nothing is written until the whole pipeline finishes** — `results.json` after Stage 2,
-`video.mp4` after rendering. On a long clip at a small `--every_n_frames` that is a long wait with
-no output on disk, so run a short prefix first (`--max_frames 30`) to confirm the thresholds suit
-your video, then launch the full pass. `--output_dir` moves the root.
+`--output_dir` names the per-mode directory directly (default `output/inference/<mode>`).
+
+**The annotated video is written by both modes, always** — including when nothing was detected. A
+zero-detection run still produces a playable `video.mp4` with the header and no boxes, because an
+empty annotated video is itself the diagnosis.
+
+**Nothing is written until the whole pipeline finishes** — `results.json` after Stage 2, `video.mp4`
+after rendering. On a long clip at a small `--every_n_frames` that is a long wait with no output on
+disk, so run a short prefix first (`--max_frames 30`) to confirm the thresholds suit your video,
+then launch the full pass.
+
+### CPU vs GPU
+
+The pipeline runs on both, and they are compared rather than assumed equal.
+
+- **CPU (this workstation).** `sh scripts/inference/inference.sh stage1 <clip>` falls back to
+  `--device cpu` automatically. Stage 1 costs roughly 2.6 s/frame, so use `--max_frames` for a
+  smoke check.
+- **GPU (RunPod).** Same commands; the launcher picks `--device cuda`. No `--max_frames`, so the
+  whole clip runs.
+
+What to compare between the two runs of the same clip:
+
+- **Must match exactly:** `num_source_frames`, `stride`, `source_size`. These describe the input, so
+  they are device-independent and any difference is a bug. `num_frames` is *not* comparable if one
+  run used `--max_frames`.
+- **May differ slightly:** box and detection counts. CPU and GPU kernels are not bit-identical, and
+  a query sitting exactly on the `--conf_sub`/`--conf_obj` boundary can fall either side.
+- **Read the `best score before thresholding` line expecting the GPU number to be ≥ the CPU one.**
+  It is a max over frames, so a GPU run of the whole clip can only raise it relative to an 8-frame
+  CPU prefix. A GPU figure *below* the CPU one is the real signal to investigate.
 
 ### Read the `best score before thresholding` line first
 
