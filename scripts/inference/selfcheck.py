@@ -145,6 +145,96 @@ def decode_frame_dedups_same_class_pairs():
     assert len(detections) == 1, f"duplicates were not merged: {len(detections)}"
 
 
+@check
+def weighted_vote_prefers_confidence():
+    from vrdf_inference.tracklets import weighted_vote
+
+    # 1 appears twice but with tiny weight; 2 appears once with a large weight.
+    assert weighted_vote([1, 1, 2], [0.01, 0.01, 5.0]) == 2
+    assert weighted_vote([1, 1, 2], [5.0, 5.0, 0.01]) == 1
+    # Ties break deterministically on the value, not on insertion order.
+    assert weighted_vote([3, 1], [1.0, 1.0]) == 1
+
+
+def _synthetic_detection(frame_shift, cls=5):
+    """A detection whose subject box slides right with ``frame_shift``; object box fixed."""
+    return {
+        "sub_cls": cls,
+        "obj_cls": 7,
+        "pair_score": 0.2,
+        "box_n_sub": [0.1 + frame_shift, 0.1, 0.3 + frame_shift, 0.3],
+        "box_n_obj": [0.5, 0.5, 0.7, 0.7],
+        "box_px_sub": [0.0, 0.0, 1.0, 1.0],
+        "box_px_obj": [0.0, 0.0, 1.0, 1.0],
+        "box_resized_sub": [0.0, 0.0, 1.0, 1.0],
+        "box_resized_obj": [0.0, 0.0, 1.0, 1.0],
+        "query_idx": 0,
+        "sub_score": 0.2,
+        "obj_score": 0.2,
+        "verb_cls": 0,
+        "verb_score": 0.2,
+    }
+
+
+def _assoc_args(**overrides):
+    import argparse
+
+    base = {
+        "iou_thresh": 0.3,
+        "max_gap": 2,
+        "min_tracklet_frames": 1,
+        "cls_gate": "motion",
+        "cls_vote": "keep",
+    }
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+@check
+def tracklets_join_boxes_that_overlap():
+    from vrdf_inference.tracklets import form_tracklets
+
+    # Frame 0 and frame 1 overlap heavily -> one tracklet spanning both frames.
+    tracklets = form_tracklets(
+        [[_synthetic_detection(0.0)], [_synthetic_detection(0.02)]], _assoc_args()
+    )
+    assert len(tracklets) == 1, f"expected one joined tracklet, got {len(tracklets)}"
+    assert tracklets[0]["frame_indices"] == [0, 1], tracklets[0]["frame_indices"]
+
+
+@check
+def tracklets_split_on_no_overlap():
+    from vrdf_inference.tracklets import form_tracklets
+
+    # Frame 1's subject box moved far away -> no overlap -> two tracklets.
+    tracklets = form_tracklets(
+        [[_synthetic_detection(0.0)], [_synthetic_detection(0.6)]], _assoc_args()
+    )
+    assert len(tracklets) == 2, f"expected two tracklets, got {len(tracklets)}"
+
+
+@check
+def tracklets_bridge_a_missed_frame_within_max_gap():
+    from vrdf_inference.tracklets import form_tracklets
+
+    # A gap at frame 1, then an overlapping box at frame 2, is inside max_gap=2.
+    tracklets = form_tracklets(
+        [[_synthetic_detection(0.0)], [], [_synthetic_detection(0.02)]], _assoc_args()
+    )
+    assert len(tracklets) == 1, f"the gap was not bridged: {len(tracklets)} tracklets"
+    assert tracklets[0]["frame_indices"] == [0, 2], tracklets[0]["frame_indices"]
+
+
+@check
+def tracklets_respect_min_frames():
+    from vrdf_inference.tracklets import form_tracklets
+
+    # The single-frame tracklet is dropped once min_tracklet_frames rises above 1.
+    per_frame = [[_synthetic_detection(0.0)], [_synthetic_detection(0.02)]]
+    assert len(form_tracklets(per_frame, _assoc_args())) == 1
+    assert len(form_tracklets(per_frame, _assoc_args(min_tracklet_frames=3))) == 0
+
+
 def main():
     failed = 0
     for fn in CHECKS:
