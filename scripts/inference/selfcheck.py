@@ -375,6 +375,92 @@ def renderers_always_write_a_playable_video():
             assert frame_count(out) == 5, f"{name}: wrong frame count"
 
 
+def _payload_args():
+    import argparse
+
+    return argparse.Namespace(
+        every_n_frames=5,
+        conf_sub=0.15,
+        conf_obj=0.15,
+        conf_verb=0.15,
+        dedup_iou=0.9,
+        stage1_ckpt="ck1.pth",
+        stage1_config="c1.json",
+        stage2_ckpt="ck2.pth",
+        stage2_config="c2.json",
+        obj_names=["a"] * 80,
+        action_names=["v"] * 50,
+    )
+
+
+def _payload_meta():
+    return {
+        "num_source_frames": 100,
+        "num_decoded_frames": 20,
+        "frame_ids": [0, 5, 10],
+        "fps": 30.0,
+        "source_width": 320,
+        "source_height": 240,
+        "per_frame": [[]],
+        "source_hw": (240, 320),
+    }
+
+
+@check
+def stage1_payload_omits_triplet_keys():
+    import argparse
+
+    from vrdf_inference import results
+
+    stage_args = argparse.Namespace(dataset="vidorsmall", resolution="large")
+    payload = results.detection_payload(
+        "v.mp4", "vid", _payload_meta(), (200, 300), _payload_args(), stage_args
+    )
+    assert payload["mode"] == "stage1", payload["mode"]
+    assert "predictions" not in payload, sorted(payload)
+    assert "num_tracklets" not in payload, sorted(payload)
+    assert "stage2" not in payload, sorted(payload)
+    assert payload["num_detections"] == 0, payload["num_detections"]
+    assert payload["source_size"] == [320, 240], payload["source_size"]
+
+
+@check
+def stage2_payload_records_both_stage_sizes():
+    import argparse
+
+    from vrdf_inference import results
+
+    stage_args = argparse.Namespace(dataset="vidorsmall", resolution="large")
+    stage2_args = argparse.Namespace(dataset="vidorsmall", resolution="small")
+    args = _payload_args()
+    args.iou_thresh = 0.3
+    args.max_gap = 2
+    args.min_score = 0.05
+    payload = results.triplet_payload(
+        "v.mp4",
+        "vid",
+        _payload_meta(),
+        (800, 1066),
+        args,
+        stage_args,
+        stage2_args,
+        (600, 800),
+        [{"so_id": "0-0"}],
+        [{"triplet": ["a", "v", "a"]}],
+    )
+    assert payload["mode"] == "stage2", payload["mode"]
+    assert payload["num_tracklets"] == 1, payload["num_tracklets"]
+    assert payload["num_predictions"] == 1, payload["num_predictions"]
+    assert payload["stage1"]["resolution"] == "large", payload["stage1"]
+    assert payload["stage2"]["resolution"] == "small", payload["stage2"]
+    # The two sizes differ, and both are recorded: this is the box-scale bug made visible.
+    assert payload["resized_size"] == [1066, 800], payload["resized_size"]
+    assert payload["stage2"]["input_size"] == [800, 600], payload["stage2"][
+        "input_size"
+    ]
+    assert payload["thresholds"]["min_score"] == 0.05, payload["thresholds"]
+
+
 def main():
     failed = 0
     for fn in CHECKS:
