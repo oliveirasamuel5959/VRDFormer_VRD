@@ -235,6 +235,49 @@ def tracklets_respect_min_frames():
     assert len(form_tracklets(per_frame, _assoc_args(min_tracklet_frames=3))) == 0
 
 
+@check
+def pseudo_target_uses_the_given_size():
+    """The stage-2 pixel boxes must follow stage 2's own input size, not stage 1's."""
+    import torch
+
+    from vrdf_inference.stage2 import build_pseudo_target
+
+    def tracklet(sub_box_n):
+        frame = {
+            "box_n_sub": sub_box_n,
+            "box_n_obj": [0.4, 0.4, 0.8, 0.8],
+            "box_resized_sub": [0.0, 0.0, 1.0, 1.0],
+            "box_resized_obj": [0.0, 0.0, 1.0, 1.0],
+            "pair_score": 0.2,
+        }
+        return {
+            "sub_tid": 0,
+            "obj_tid": 0,
+            "sub_cls": 5,
+            "obj_cls": 7,
+            "frames": {0: frame},
+        }
+
+    active = [tracklet([0.25, 0.25, 0.75, 0.75])]
+    cpu = torch.device("cpu")
+
+    # A half-width box: 0.5 * 600 = 300 wide, 0.5 * 800 = 400 tall.
+    target = build_pseudo_target(active, 0, cpu, 50, (800, 600))
+    box = target["unscaled_sub_boxes"][0]
+    assert abs(float(box[2] - box[0]) - 300.0) < 1e-3, box
+    assert abs(float(box[3] - box[1]) - 400.0) < 1e-3, box
+
+    # The same normalized box at a different stage-2 size must scale differently. This is the bug
+    # the task fixes, so a size-insensitive implementation fails here.
+    other = build_pseudo_target(active, 0, cpu, 50, (600, 800))
+    other_box = other["unscaled_sub_boxes"][0]
+    assert abs(float(other_box[2] - other_box[0]) - 400.0) < 1e-3, other_box
+
+    # memory_update reads shape[0] of sub_boxes, so it must exist and match the row count.
+    assert target["sub_boxes"].shape[0] == len(active), target["sub_boxes"].shape
+    assert target["num_inst"] == len(active), target["num_inst"]
+
+
 def main():
     failed = 0
     for fn in CHECKS:
