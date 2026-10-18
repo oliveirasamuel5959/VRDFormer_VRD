@@ -21,5 +21,7 @@
   "tracking": true,
   "track_prev_frame_range": 8,
   "focal_loss": true,
-  "aux_loss": false
+  "aux_loss": false,
+  "benchmark": false,
+  "resolution": "large"
 }
