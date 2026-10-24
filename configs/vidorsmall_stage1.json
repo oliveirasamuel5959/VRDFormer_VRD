@@ -4,7 +4,7 @@
   "pretrain": "data/weights/detr-r101-2c7b67e5.pth",
   "output_dir": "data/ckpts/vidorsmall_stage1",
   "batch_size": 4,
-  "epochs": 2,
+  "epochs": 5,
   "lr_drop": 4,
   "num_workers": 2,
   "max_duration": 24,
