@@ -46,6 +46,22 @@ sh scripts/stage2/train.sh              # VidVRD stage 2
 sh scripts/stage2/eval_vidorsmall.sh    # stage-2 evaluation with configured checkpoint
 ```
 
+Single-video inference (an arbitrary `.mp4`, no ground truth) is a separate entry point with two
+modes. The pipeline lives in `vrdf_inference/`; `inference.py` at the root is a thin dispatcher.
+
+```bash
+sh scripts/inference/inference.sh stage1 clip.mp4          # detection only, annotated
+sh scripts/inference/inference.sh stage2 clip.mp4          # + triplets, annotated
+# or: python inference.py --video clip.mp4 --mode stage1|stage2
+```
+
+`--mode` is required. **Both modes always write an annotated `video.mp4`** plus a `results.json`
+under `output/inference/<mode>/<video_id>/` — there is no flag to skip the video, and a
+zero-detection run still writes one. `scripts/inference/selfcheck.py` holds the pure-logic checks
+for the package (`python scripts/inference/selfcheck.py`); there is no pytest suite here.
+Stage-2 conflicts between a config and its checkpoint resolve in the checkpoint's favour for
+`resolution` only — see `docs/RUNPOD_INFERENCE.md`.
+
 Set `NPROC_PER_NODE=<gpu_count>` to override the small-subset wrappers' one-GPU default. The main
 training scripts under `scripts/stage1/` and `scripts/stage2/` cover other datasets and deformable
 variants. Deformable variants require a compatible CUDA build of `models/ops`.
@@ -160,3 +176,58 @@ args that no longer exist (`args.crowdhuman_path`, `args.coco_and_crowdhuman_pre
 - Stage 1 can train but has no evaluation implementation. `--eval` is stage-2-only and asserts otherwise; stage-1 training does not run validation.
 - Deformable transformer configs require `num_feature_levels > 1` and a successfully built `models/ops` CUDA extension; the vanilla transformer asserts `num_feature_levels == 1`.
 - `datasets/__init__.py` routes only the exact dataset name `vidvrd` to VidVRD; names such as `vidorpart` use VidOR.
+
+## Skills and agents
+
+Skills and subagents are installed globally — skills under `~/.claude/skills/` and the
+`superpowers` plugin (`~/.claude/plugins/marketplaces/superpowers-dev/skills/`), agents under
+`~/.claude/agents/`. Invoke a skill through the `Skill` tool (plugin skills are namespaced, e.g.
+`superpowers:karpathy-guidelines`) and a subagent through the `Agent` tool.
+
+**Pick the skill before you write code, and announce it.** If there is even a small chance one
+applies, invoke it and follow it; drop it only if it turns out not to fit. Process skills
+(brainstorming, debugging) come before implementation skills (refactoring, testing-strategy).
+
+### Which skill for which task
+
+| Task | Skill |
+| --- | --- |
+| Any code write, review, refactor or edit | `superpowers:karpathy-guidelines` — minimum code, surgical changes, no speculative abstractions; the standing lens for every edit |
+| Planning a new feature, model head, dataset or training stage | `superpowers:brainstorming` to settle intent, then `superpowers:writing-plans` for the written plan, then `superpowers:executing-plans` (or `superpowers:subagent-driven-development` to run it in this session) |
+| A bug, crash, NaN/inf loss, hang, or wrong eval number | `superpowers:systematic-debugging` **before** proposing any fix |
+| Non-trivial change with unclear contracts or file locations | `superpowers:surfacing-assumptions`, then `superpowers:verifying-assumptions` to discharge each one with evidence |
+| Adding or reviewing tests | `superpowers:test-driven-development`, plus `testing-strategy` to choose the level |
+| Isolating feature work from the working tree | `superpowers:using-git-worktrees` |
+| Two or more independent tasks (e.g. separate configs or datasets) | `superpowers:dispatching-parallel-agents` |
+| Long training runs, multi-GPU sweeps, long debug sessions | `superpowers:token-budget-discipline` to bound context before checkpointing |
+| Before saying work is finished or committing | `superpowers:verification-before-completion` and the `verify` skill — evidence, not assertions |
+| Before merging or opening a PR | `superpowers:requesting-code-review` (and `receiving-code-review` when handling the feedback), or the `review` / `review-pr` commands |
+| Committing or pushing | `git-commit-push` skill or `commit` command — Conventional Commits |
+| Code design, coupling, layering questions | `code-conventions`; `refactoring` for behaviour-preserving restructuring |
+| Writing architecture or API docs, ADRs, diagrams | `doc` |
+| Vague requirements that need an agreed definition of done | `spec-kit` |
+| Turning results into a report or figures | `report`, `scientific-visualization`, `data-analyst-reporting` |
+| LLM calls inside this codebase | `superpowers:prefer-deterministic-code` — anything with a deterministic answer stays a plain function |
+| Finishing a branch (merge, PR or cleanup) | `superpowers:finishing-a-development-branch` |
+| Creating or editing a skill | `superpowers:writing-skills` |
+
+### Which subagent for which task
+
+| Agent | Use it for |
+| --- | --- |
+| `explore` / `Explore` | Mapping where things live across `models/`, `datasets/`, `util/` without pulling whole files into context |
+| `ask` | "How does stage 2 thread `memory` through frames?"-style questions — answers from the code, changes nothing |
+| `debugger` | Root-causing a failure that `systematic-debugging` has narrowed but not explained |
+| `planner` | A numbered implementation plan (files, approach, risks, tests) before a multi-step or architectural change |
+| `architect` | Design trade-offs and boundaries — a decision record, not code |
+| `reviewer` | Reviewing a diff or PR for correctness, regressions and missing tests before merge |
+| `security-reviewer` | Anything touching checkpoint loading, `torch.load`, pickles, dataset paths or untrusted input |
+| `statistician` | Judging an evaluation result — metric choice, slice sizes, whether a gain is real or noise |
+| `ml-engineer` | Taking a trained model toward serving, retraining schedules or drift monitoring |
+| `claude-code-guide` | Questions about Claude Code, the Agent SDK or the Claude API from inside this repo |
+
+Notes for this repo: there is no pytest suite, so `testing-strategy` and the `test` command
+usually bottom out at `ruff check .`, the `models/ops/test*.py` scripts (CUDA extension required)
+and a short-config smoke run rather than a real suite. Evaluation is a GPU job, so
+`verification-before-completion` here means showing the actual command and its output, not a claim
+that a run "should" pass.

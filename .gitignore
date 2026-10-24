@@ -3,6 +3,7 @@ data/
 *.pkl
 *.pth
 *.pt
+*.mp4
 __pycache__/
 *.pyc
 *.pyo
@@ -16,3 +17,6 @@ __pycache__/
 build/
 dist/
 settings.local.json
+
+# Inference outputs (inference.py writes output/inference/<dataset>/<video_id>/)
+output/
