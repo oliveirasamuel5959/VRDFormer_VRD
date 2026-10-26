@@ -32,6 +32,12 @@ The installer requires the matching Python/Torch/Torchvision/CUDA versions above
 Open a terminal/SSH session **inside the running RunPod pod** (not the local workstation or `runpodctl` management CLI). Clone the repository if it is not already on the pod, then run the setup script from the checkout:
 
 ```bash
+git clone https://github.com/oliveirasamuel5959/VRDFormer_VRD.git
+cd VRDFormer_VRD
+bash scripts/runpod/install_stage1_deps.sh
+```
+
+```bash
 python3.12 -m venv ./.venv
 ```
 
@@ -41,10 +47,20 @@ python -m pip install \
   --index-url https://download.pytorch.org/whl/cu128
 ```
 
+## Download dataset from kaggle to server
+
 ```bash
-git clone https://github.com/oliveirasamuel5959/VRDFormer_VRD.git
-cd VRDFormer_VRD
-bash scripts/runpod/install_stage1_deps.sh
+mkdir -p ~/.kaggle
+mv ~/kaggle/kaggle.json ~/.kaggle/
+chmod 600 ~/.kaggle/kaggle.json
+pip install kaggle -q
+```
+
+```bash
+mkdir -p data/metadata data/weights data/ckpts
+kaggle datasets download samuelpatricio/vrdformer-vidor-small
+unzip -q vrdformer-vidor-small.zip -d data
+rm vrdformer-vidor-small.zip
 ```
 
 The script creates `.venv` with access to the image's installed packages, installs the pinned Stage-1 dependencies, and validates:
