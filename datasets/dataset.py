@@ -12,6 +12,12 @@ from torch.utils.data import Dataset
 # Module-level cache for annotation pickles: avoid loading the same file
 # twice when building both train and val datasets.
 _ANNO_CACHE = {}
+
+# Val videos are decoded one whole video per __getitem__, so cap how many frames that is.
+# See prepare_data_stage1. A frame is ~4 MB as a (3, 800, 1333) float tensor and the padded
+# NestedTensor copy roughly doubles that, so 16 frames keeps one sample around 130 MB.
+STAGE1_EVAL_FRAMES_PER_VIDEO = 16
+
 from decord import VideoReader, cpu
 from util.box_ops import box_cxcywh_to_xyxy
 from . import video_transforms as T
@@ -200,6 +206,28 @@ class VRDBase(Dataset):
         return img, target      
     
     def prepare_data_stage1(self, index):
+        if self.image_set != "train":
+            # Val yields the whole video's positive frames as one clip, so the stage-1
+            # evaluator can run it frame by frame in order. Mirrors prepare_data_stage2's
+            # val branch; getitem_from_id returns a per-frame list only for >2 frames.
+            #
+            # A val video has up to a few thousand positive frames, so the clip is strided
+            # down to STAGE1_EVAL_FRAMES_PER_VIDEO. The metrics are per-frame averages over
+            # all val videos, so an evenly spread sample is representative and keeps one
+            # video's decode well inside memory (each frame is ~10 MB once resized).
+            video_id = self.idx2vid[index]
+            val_pos_frames = np.asarray(self.val_frame_meta[video_id], dtype=int)
+            seq_fids = np.argwhere(val_pos_frames).reshape(-1)
+            stride = max(1, len(seq_fids) // STAGE1_EVAL_FRAMES_PER_VIDEO)
+            seq_fids = seq_fids[::stride]
+            assert len(seq_fids) > 2, (
+                f"val video {video_id} has {len(seq_fids)} frames after striding; stage-1 "
+                f"evaluation needs more than 2 to build a frame sequence"
+            )
+            img, targets = self.getitem_from_id(video_id, seq_fids)
+            targets[0]['video_id'] = video_id
+            return img, targets
+
         begin_frame = self.train_begin_fids[index]
         _, video_id, begin_fid = self.parse_frame_name(begin_frame)
         frame_id = int(begin_fid)

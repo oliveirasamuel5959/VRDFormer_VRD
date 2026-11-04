@@ -173,7 +173,10 @@ args that no longer exist (`args.crowdhuman_path`, `args.coco_and_crowdhuman_pre
 
 ## Known rough edges
 
-- Stage 1 can train but has no evaluation implementation. `--eval` is stage-2-only and asserts otherwise; stage-1 training does not run validation.
+- Stage 1 now has an evaluator (`engine.eval_stage1`): `--eval --stage 1` or `--eval_stage1` per epoch,
+  reporting box AP@0.5, pair AP@0.5 and detections-per-GT-object. It is off by default because a full
+  val pass is expensive. `scripts/stage1/eval_vidorsmall.sh` runs it. Both stages' eval wrappers need
+  `--num_queries 200` to match the trained checkpoints.
 - Deformable transformer configs require `num_feature_levels > 1` and a successfully built `models/ops` CUDA extension; the vanilla transformer asserts `num_feature_levels == 1`.
 - `datasets/__init__.py` routes only the exact dataset name `vidvrd` to VidVRD; names such as `vidorpart` use VidOR.
 

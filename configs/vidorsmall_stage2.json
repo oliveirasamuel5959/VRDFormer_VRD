@@ -1,7 +1,7 @@
 {
   "dataset": "vidorsmall",
   "vidor_path": "data/vidorsmall",
-  "pretrain": "data/ckpts/vidorsmall_stage1/checkpoint0001.pth",
+  "pretrain": "data/ckpts/vidorsmall_stage1/checkpoint.pth",
   "output_dir": "data/ckpts/vidorsmall_stage2",
   "epochs": 2,
   "lr_drop": 1,

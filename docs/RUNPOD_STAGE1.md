@@ -1,5 +1,21 @@
 # RunPod Stage-1 Setup
 
+The full pipeline, in order, with the doc that covers each step:
+
+| # | Step | Command | Doc |
+| - | ---- | ------- | --- |
+| 1 | Install environment | `scripts/runpod/install_stage1_deps.sh` | this file |
+| 2 | Prepare data | `cd data && python prepare.py --func ...` | [`DATA.md`](DATA.md) |
+| 3 | Train stage 1 | `sh scripts/stage1/train_vidorsmall.sh` | this file |
+| 4 | **Evaluate stage 1** | `sh scripts/stage1/eval_vidorsmall.sh` | this file, below |
+| 5 | Train stage 2 | `sh scripts/stage2/train_vidorsmall.sh` | [`RUNPOD_STAGE2.md`](RUNPOD_STAGE2.md) |
+| 6 | Evaluate stage 2 | `sh scripts/stage2/eval_vidorsmall.sh` | [`RUNPOD_STAGE2.md`](RUNPOD_STAGE2.md) |
+| 7 | Inference (both modes) | `sh scripts/inference/inference.sh stage1|stage2 clip.mp4` | [`INFERENCE.md`](INFERENCE.md) |
+
+Steps 4 and 6 exist **in both stages now**. When this guide was first written only stage 2 had an
+evaluator, so stage 1 was handed straight to stage 2 unmeasured — which is how an undertrained
+checkpoint reached the inference videos.
+
 This guide moves the setup recorded in [`notebooks/vrdformer.ipynb`](../notebooks/vrdformer.ipynb) from notebook cells to a RunPod pod's Linux shell. It installs and checks the Python runtime for the **standard Stage-1 VidOR-small config**; it does not download the dataset/checkpoints or start training.
 
 ## Tested baseline
@@ -122,6 +138,43 @@ NPROC_PER_NODE=2 sh scripts/stage1/train_vidorsmall.sh
 ```
 
 The wrapper uses `configs/vidorsmall_stage1.json`, `--num_queries 200`, `--lr 5e-5`, and `--lr_backbone 1e-5`. Start with `NPROC_PER_NODE=1` if only one GPU is allocated. Training requires the data and checkpoint files listed above; successful dependency checks alone do not mean the run is ready.
+
+The checked-in config runs `epochs: 12` with `lr_drop: 8`, so the learning rate actually drops before
+the end of the schedule. Earlier runs used `epochs: 5` / `lr_drop: 4`, which produced an
+**undertrained** checkpoint: every kept detection scored 0.30–0.47, the model emitted several boxes
+per object, and stage 2 inherited that noise. Do not shorten the schedule back.
+
+## Evaluate Stage 1
+
+Stage 1 has an evaluator (`engine.eval_stage1`); see [`STAGE1.md`](STAGE1.md) §7.1 for the metric
+definitions. Run it after training, before pointing stage 2 at the checkpoint:
+
+```bash
+source .venv/bin/activate
+sh scripts/stage1/eval_vidorsmall.sh
+```
+
+`--num_queries 200` in that wrapper is required — the checkpoints store 200-query embeddings, and
+without it argparse builds a 100-query model and the load fails with a `query_embed.weight` size
+mismatch.
+
+**Memory:** each val sample is one video decoded as a 16-frame clip
+(`STAGE1_EVAL_FRAMES_PER_VIDEO` in `datasets/dataset.py`), roughly 130 MB padded. With the config's
+`num_workers: 2` and prefetching that is a few hundred MB per worker, which is fine on a pod but
+will OOM a small workstation (`DataLoader worker ... is killed by signal: Killed`). On a constrained
+machine, set `"num_workers": 0` in a copy of the config — editing the JSON, not passing
+`--num_workers`, since the config JSON overwrites CLI flags (`main.py:150-155`).
+
+It prints three numbers. Read them in this order:
+
+| Metric | What it tells you | Healthy |
+| --- | --- | --- |
+| `stage1_dups_per_gt` | Detections matching each ground-truth object, averaged | → **1.0**; 2+ means duplicate boxes |
+| `stage1_box_ap` | Object-detection AP@0.5, macro-averaged over classes | rises with training |
+| `stage1_pair_ap` | AP@0.5 when *both* boxes must match | rises with training |
+
+`stage1_dups_per_gt` is the reason this step exists: it is the duplicate-box failure that the
+inference videos render, and it is invisible in train loss.
 
 ## After Stage-1 training transfer ckpts
 

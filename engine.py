@@ -1,10 +1,14 @@
 import torch
 import math
 import datetime
+import numpy as np
+from collections import defaultdict
+from types import SimpleNamespace
 import util.misc as utils
 from util.misc import NestedTensor, target_to_cuda
-from util.dist import reduce_dict, get_rank, print_all_ranks
-from util.box_ops import debug_and_vis
+from util.dist import reduce_dict, get_rank, print_all_ranks, is_main_process, get_world_size
+from util.box_ops import debug_and_vis, box_cxcywh_to_xyxy, box_iou
+from util.compute import voc_ap
 from util.evaluate import evaluate
 
 
@@ -287,4 +291,206 @@ def eval_stage2(model, val_loader, device, epoch, args):
         print("[info] Video %d"%i)
     scores = evaluate(groundtruth, prediction, val_dataset)
     print(scores)
+    return scores
+
+
+def _xyxy_ious(boxes_a, boxes_b):
+    """Pairwise IoU as an (N, M) numpy array; zeros when either side is empty."""
+    if len(boxes_a) == 0 or len(boxes_b) == 0:
+        return np.zeros((len(boxes_a), len(boxes_b)), dtype=np.float32)
+    iou, _ = box_iou(torch.as_tensor(boxes_a, dtype=torch.float32),
+                     torch.as_tensor(boxes_b, dtype=torch.float32))
+    return torch.nan_to_num(iou).numpy()
+
+
+def _greedy_ap(num_gt, scores, hits):
+    """AP over one class's ranked detections, each GT matchable once (VOC convention).
+
+    ``hits`` holds one entry per detection: the index of the matched ground truth, or None.
+    """
+    order = np.argsort(-np.asarray(scores), kind="stable")
+    matched = set()
+    tp = np.zeros(len(order), dtype=np.float32)
+    fp = np.zeros(len(order), dtype=np.float32)
+    for rank, det_i in enumerate(order):
+        gt_i = hits[det_i]
+        if gt_i is not None and gt_i not in matched:
+            matched.add(gt_i)
+            tp[rank] = 1.0
+        else:
+            fp[rank] = 1.0
+    if num_gt == 0:
+        return None
+    tp_cum = np.cumsum(tp)
+    fp_cum = np.cumsum(fp)
+    rec = tp_cum / num_gt
+    prec = tp_cum / np.maximum(tp_cum + fp_cum, 1e-9)
+    return float(voc_ap(rec, prec))
+
+
+@torch.no_grad()
+def eval_stage1(model, val_loader, device, epoch, args, iou_thresh=0.5, max_videos=None):
+    """Stage-1 detection metrics on the val split.
+
+    Reports three numbers, each pooled over every scored frame:
+
+    * ``box_ap`` -- AP@0.5 per object class and role, macro-averaged.
+    * ``pair_ap`` -- AP@0.5 over (sub_cls, obj_cls) groups, a detection correct only when
+      *both* boxes clear the threshold.
+    * ``dups_per_gt`` -- detections matching each ground-truth object @0.5, averaged. 1.0 is
+      ideal; higher means the model emits several boxes for one object, which is the failure
+      this metric exists to track.
+
+    Detection decoding goes through ``vrdf_inference.stage1.decode_frame`` so the numbers
+    describe exactly the detections inference produces, not a second implementation of them.
+    """
+    from models.vrdformer import VRDFormer
+    from vrdf_inference.stage1 import decode_frame
+
+    model.eval()
+    model_without_ddp = model.module if hasattr(model, "module") else model
+    metric_logger = utils.MetricLogger(
+        args.vis_and_log_interval, delimiter="  ", vis=None, debug=args.debug)
+
+    # decode_frame reads its thresholds off args; training args do not carry them, and the
+    # inference defaults are the calibrated ones (see docs/RUNPOD_INFERENCE.md).
+    decode_args = SimpleNamespace(
+        conf_sub=getattr(args, "conf_sub", 0.15),
+        conf_obj=getattr(args, "conf_obj", 0.15),
+        dedup_iou=getattr(args, "dedup_iou", 0.9),
+        max_dets_per_frame=getattr(args, "max_dets_per_frame", 50),
+    )
+
+    # per (role, class) ranked detection records, each (score, matched_gt_or_None). Match
+    # keys are global (frame-scoped offset) so an index from one frame can never be mistaken
+    # for the same object in another.
+    box_records = defaultdict(list)
+    gt_counts = defaultdict(int)
+    pair_records = defaultdict(list)
+    pair_gt_counts = defaultdict(int)
+    dups_per_gt = []
+    gt_key_base = 0
+
+    num_videos = len(val_loader)
+    if max_videos is not None:
+        num_videos = min(num_videos, max_videos)
+    for i, (samples, targets) in enumerate(metric_logger.log_every(val_loader, epoch)):
+        if i >= num_videos:
+            break
+        if not isinstance(samples, NestedTensor):
+            samples = NestedTensor.from_tensor_list(samples)
+        samples = samples.to(device)
+        frame_targets = targets[0]
+
+        prev_features = None
+        for fid, target in enumerate(frame_targets):
+            cur_frame = samples.select_frame(fid)
+            # Call the base VRDFormer.forward, not the tracking wrapper: the wrapper needs
+            # per-frame targets (to build track queries) and has no `stage` kwarg. This is
+            # the same path single-video inference takes (vrdf_inference/stage1.py:158).
+            out, _, prev_features, _, _ = VRDFormer.forward(
+                model_without_ddp, cur_frame, targets=None, prev_features=prev_features)
+            dets, _ = decode_frame(out, (samples.tensors.shape[-2], samples.tensors.shape[-1]),
+                                   (samples.tensors.shape[-2], samples.tensors.shape[-1]),
+                                   decode_args)
+
+            gt_sub = box_cxcywh_to_xyxy(target["sub_boxes"]).numpy()
+            gt_obj = box_cxcywh_to_xyxy(target["obj_boxes"]).numpy()
+            gt_sub_cls = target["sub_labels"].numpy()
+            gt_obj_cls = target["obj_labels"].numpy()
+            det_sub = np.stack([d["box_n_sub"] for d in dets]) if dets else np.zeros((0, 4))
+            det_obj = np.stack([d["box_n_obj"] for d in dets]) if dets else np.zeros((0, 4))
+
+            for role, det_boxes, gt_boxes, gt_cls, det_cls, det_score in (
+                ("sub", det_sub, gt_sub, gt_sub_cls,
+                 np.array([d["sub_cls"] for d in dets], dtype=int),
+                 np.array([d["sub_score"] for d in dets])),
+                ("obj", det_obj, gt_obj, gt_obj_cls,
+                 np.array([d["obj_cls"] for d in dets], dtype=int),
+                 np.array([d["obj_score"] for d in dets])),
+            ):
+                ious = _xyxy_ious(det_boxes, gt_boxes)
+                for c in np.unique(gt_cls):
+                    gt_counts[(role, int(c))] += int((gt_cls == c).sum())
+                for d_i in range(len(det_boxes)):
+                    same_class = [g for g in range(len(gt_boxes)) if gt_cls[g] == det_cls[d_i]]
+                    best = max(same_class, key=lambda g: ious[d_i, g]) if same_class else None
+                    hit = (gt_key_base + best if best is not None
+                           and ious[d_i, best] >= iou_thresh else None)
+                    box_records[(role, int(det_cls[d_i]))].append((float(det_score[d_i]), hit))
+
+            # pair metrics: group by (sub_cls, obj_cls)
+            for c in set(zip(gt_sub_cls.tolist(), gt_obj_cls.tolist())):
+                pair_gt_counts[c] += int(((gt_sub_cls == c[0]) & (gt_obj_cls == c[1])).sum())
+            iou_sub = _xyxy_ious(det_sub, gt_sub)
+            iou_obj = _xyxy_ious(det_obj, gt_obj)
+            if len(dets):
+                for d_i, d in enumerate(dets):
+                    grp = (d["sub_cls"], d["obj_cls"])
+                    cand = [g for g in range(len(gt_sub))
+                            if (gt_sub_cls[g], gt_obj_cls[g]) == grp]
+                    hit = None
+                    if cand:
+                        best = max(cand, key=lambda g: min(iou_sub[d_i, g], iou_obj[d_i, g]))
+                        if min(iou_sub[d_i, best], iou_obj[d_i, best]) >= iou_thresh:
+                            hit = gt_key_base + best
+                    pair_records[grp].append((float(d["pair_score"]), hit))
+
+            # duplicates per GT object, measured on subject boxes. Frames where the model
+            # found nothing still contribute a 0 per GT object -- skipping them would
+            # report the duplicates-per-detected-object instead, which is not the metric.
+            gt_iou = _xyxy_ious(gt_sub, gt_sub)
+            for g in range(len(gt_sub)):
+                same = np.where(gt_sub_cls == gt_sub_cls[g])[0]
+                # a GT object is a distinct box within its class: IoU0.9 merges relation
+                # instances that share an object
+                is_rep = all(g <= h or gt_iou[g, h] < 0.9 for h in same)
+                if not is_rep:
+                    continue
+                dups_per_gt.append(int((iou_sub[:, g] >= iou_thresh).sum()))
+            gt_key_base += len(gt_sub)
+
+        if i % 10 == 0:
+            print(f"[eval_stage1] video {i + 1}/{num_videos} ({targets[0][0]['video_id']})",
+                  flush=True)
+
+    def summarize(records, counts):
+        aps = []
+        for key, recs in records.items():
+            ap = _greedy_ap(counts.get(key, 0), [s for s, _ in recs],
+                            [h for _, h in recs])
+            if ap is not None:
+                aps.append(ap)
+        return float(np.mean(aps)) if aps else 0.0
+
+    # Under DDP each rank scores only its shard (the val loader uses a DistributedSampler),
+    # so pool the per-frame records before computing the metrics.
+    payload = (dict(box_records), dict(gt_counts), dict(pair_records),
+               dict(pair_gt_counts), dups_per_gt)
+    if utils.is_dist_avail_and_initialized() and get_world_size() > 1:
+        import torch.distributed as dist
+        gathered = [None] * get_world_size()
+        dist.all_gather_object(gathered, payload)
+        box_records, gt_counts, pair_records, pair_gt_counts, dups_per_gt = (
+            defaultdict(list), defaultdict(int), defaultdict(list), defaultdict(int), [])
+        for g_box, g_gcount, g_pair, g_pcount, g_dups in gathered:
+            for k, v in g_box.items():
+                box_records[k].extend(v)
+            for k, v in g_gcount.items():
+                gt_counts[k] += v
+            for k, v in g_pair.items():
+                pair_records[k].extend(v)
+            for k, v in g_pcount.items():
+                pair_gt_counts[k] += v
+            dups_per_gt.extend(g_dups)
+
+    scores = {
+        "stage1_box_ap": summarize(box_records, gt_counts),
+        "stage1_pair_ap": summarize(pair_records, pair_gt_counts),
+        "stage1_dups_per_gt": float(np.mean(dups_per_gt)) if dups_per_gt else 0.0,
+        "stage1_num_gt_objects": len(dups_per_gt),
+    }
+    metric_logger.synchronize_between_processes()
+    if is_main_process():
+        print("[eval_stage1] " + "  ".join(f"{k}={v:.4f}" for k, v in scores.items()), flush=True)
     return scores
