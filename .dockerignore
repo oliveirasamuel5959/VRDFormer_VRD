@@ -1,0 +1,22 @@
+# Only requirements-runpod-stage1.txt is COPY'd into the image; everything else is
+# bind-mounted at runtime. Exclude the large/irrelevant paths from the build context.
+
+.git
+.venv
+.ruff_cache
+__pycache__
+**/__pycache__
+
+data
+output
+notebooks
+plans
+spec
+.claude
+
+# Large binaries and artifacts (weights, checkpoints, video, pickles)
+*.pt
+*.pth
+*.pkl
+*.mp4
+*.log
