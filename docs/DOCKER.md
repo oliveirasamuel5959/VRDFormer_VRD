@@ -24,16 +24,39 @@ docker build -t vrdformer:cu128 .
 The scripts assume the **repo root** as their working directory, so mount the repo at `/app`
 and run with `-w /app`.
 
-### `docker run`
+### `docker run stage 1`
 
 ```bash
-docker run --rm --gpus all \
+docker run --gpus all \
   -v "$PWD:/app" \
   --shm-size=16g \
   -w /app \
+  --name stage1 \
   -e NPROC_PER_NODE=2 \
   vrdformer:cu128 \
   sh scripts/stage1/train_vidorsmall.sh
+```
+
+### `docker eval stage 1`
+
+```bash
+docker run --rm --gpus all \
+    -v "$PWD:/app" \
+    --shm-size=16g \
+    -w /app \
+    vrdformer:cu128 sh scripts/stage2/eval_vidorsmall.sh
+```
+
+### `docker run stage 2`
+
+```bash
+docker run --gpus all \
+    -v "$PWD:/app" \
+    --shm-size=16g \
+    -w /app \
+    --name stage2 \
+  -e NPROC_PER_NODE=2 vrdformer:cu128 \
+  sh scripts/stage2/train_vidorsmall.sh
 ```
 
 Drop into a shell instead (then run any `sh scripts/...` command interactively):
