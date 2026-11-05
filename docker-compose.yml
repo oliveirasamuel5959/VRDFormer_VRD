@@ -1,0 +1,35 @@
+# Convenience wrapper around the VRDFormer CUDA 12.8 image.
+#
+# Requires Docker Compose v2 and the nvidia-container-toolkit on the host.
+# Drops into a shell by default; override the command to run a train/eval script, e.g.:
+#
+#   docker compose run --rm vrdformer sh scripts/stage2/eval_vidorsmall.sh
+#   NPROC_PER_NODE=2 docker compose run --rm vrdformer sh scripts/stage2/train_vidorsmall.sh
+
+services:
+  vrdformer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vrdformer:cu128
+    working_dir: /app
+    # The whole repo (configs/, data/, main.py, models/, ...) is bind-mounted; data/ckpts/
+    # and output/ persist to the host because they live inside the mount.
+    volumes:
+      - .:/app
+      - vrdformer_torch_cache:/cache/torch
+    shm_size: "16gb"
+    environment:
+      NPROC_PER_NODE: "2"
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  vrdformer_torch_cache:
