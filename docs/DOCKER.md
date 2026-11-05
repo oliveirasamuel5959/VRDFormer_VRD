@@ -53,15 +53,15 @@ NPROC_PER_NODE=2 docker compose run --rm vrdformer sh scripts/stage2/train_vidor
 
 ## Mount contract
 
-| Path in container | Purpose | Mode |
-| --- | --- | --- |
-| `/app` (whole repo) | `configs/`, `main.py`, `models/`, `datasets/`, `util/`, and `data/` | bind-mounted (`$PWD`) |
-| `/app/data/weights/` | DETR pretrained backbone (`detr-r101-2c7b67e5.pth`) | read (part of `/app`) |
-| `/app/data/metadata/` | `*_annotations.pkl`, `*_frames*.json` | read (part of `/app`) |
-| `/app/data/<dataset>/` | `videos/*.mp4`, `annotations/`, `action.txt`, `obj.txt` | read (part of `/app`) |
-| `/app/data/ckpts/` | training checkpoints + stage-2 `pretrain` source | **read-write** (persists on host) |
-| `/app/output/` | inference artifacts | **read-write** (persists on host) |
-| `/cache/torch` (`TORCH_HOME`) | ImageNet backbone weights downloaded on first run | named volume, persists |
+| Path in container             | Purpose                                                             | Mode                              |
+| ----------------------------- | ------------------------------------------------------------------- | --------------------------------- |
+| `/app` (whole repo)           | `configs/`, `main.py`, `models/`, `datasets/`, `util/`, and `data/` | bind-mounted (`$PWD`)             |
+| `/app/data/weights/`          | DETR pretrained backbone (`detr-r101-2c7b67e5.pth`)                 | read (part of `/app`)             |
+| `/app/data/metadata/`         | `*_annotations.pkl`, `*_frames*.json`                               | read (part of `/app`)             |
+| `/app/data/<dataset>/`        | `videos/*.mp4`, `annotations/`, `action.txt`, `obj.txt`             | read (part of `/app`)             |
+| `/app/data/ckpts/`            | training checkpoints + stage-2 `pretrain` source                    | **read-write** (persists on host) |
+| `/app/output/`                | inference artifacts                                                 | **read-write** (persists on host) |
+| `/cache/torch` (`TORCH_HOME`) | ImageNet backbone weights downloaded on first run                   | named volume, persists            |
 
 ## First-run backbone download
 
@@ -104,6 +104,10 @@ docker run --rm vrdformer:cu128 python -c \
 docker run --rm --gpus all vrdformer:cu128 python -c \
   "import torch; print(torch.cuda.device_count())"
 # -> 2
+
+# 4. Check stage1 dependencies data
+docker run --rm --gpus all -v "$PWD:/app" -w /app vrdformer:cu128 \
+  python scripts/runpod/run_checks.py
 ```
 
 ## Out of scope
