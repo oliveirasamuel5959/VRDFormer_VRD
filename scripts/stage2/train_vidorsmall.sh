@@ -6,7 +6,7 @@
 # GPU scales with batch_size * seq_len; the config uses batch_size 1 to fit. We keep an
 # effective batch of ~4 clips/optimizer step by scaling gradient accumulation with the
 # number of processes (NPROC=1 -> 4, NPROC=2 -> 2, NPROC>=4 -> 1).
-NPROC=${NPROC_PER_NODE:-4}
+NPROC=${NPROC_PER_NODE:-2}
 ACC=$(( 4 / NPROC ))
 [ "$ACC" -lt 1 ] && ACC=1
 
