@@ -31,5 +31,14 @@ services:
               count: all
               capabilities: [gpu]
 
+  lazydocker:
+    image: lazyteam/lazydocker:latest
+    container_name: lazydocker
+    stdin_open: true
+    tty: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: "no"
+
 volumes:
   vrdformer_torch_cache:
