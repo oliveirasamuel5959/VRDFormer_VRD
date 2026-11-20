@@ -1,6 +1,8 @@
 # VRDFormer Stage 2 — vidorsmall (8x smaller VidOR subset)
-# Requires the Stage 1 checkpoint at data/ckpts/vidorsmall_stage1/checkpoint0004.pth
-# (path is set in configs/vidorsmall_stage2.json as "pretrain").
+# Initialises from the Stage 1 checkpoint named by "pretrain" in configs/vidorsmall_stage2.json
+# (default data/ckpts/vidorsmall_stage1/checkpoint.pth — the final Stage-1 epoch). Edit that
+# key if your Stage-1 run wrote to a different output_dir, or to pick a different epoch using
+# the stage-1 evaluator's dups_per_gt / box_ap (docs/STAGE1.md §7.1).
 #
 # Stage 2 keeps the autograd graph alive across all seq_len frames, so peak memory per
 # GPU scales with batch_size * seq_len; the config uses batch_size 1 to fit. We keep an

@@ -29,21 +29,32 @@ The training loop in `main.py:218-231` writes to `output_dir` after **every** ep
 | `config.json` | once at startup | the fully resolved `args` (argparse defaults + config JSON) |
 | `log.txt` | one JSON line per epoch | train losses / errors / lr / epoch / `n_parameters` |
 
-For `data/ckpts/vidorsmall_stage1`, the Stage-1 config uses `epochs: 2`, so epoch indices are `0` and `1`:
+For `data/ckpts/vidorsmall_stage1`, the shipped Stage-1 config now uses `epochs: 12`, so epoch
+indices run `0`–`11` and `checkpoint0011.pth` is the final epoch:
 
 | File | Epoch |
 | ---- | ----- |
 | `checkpoint0000.pth` | 0 (first epoch) |
-| `checkpoint0001.pth` | 1 (final epoch) |
-| `checkpoint.pth` | 1 (same as above; just overwritten each epoch) |
+| `checkpoint0011.pth` | 11 (final epoch) |
+| `checkpoint.pth` | 11 (same as above; just overwritten each epoch) |
 
 ### Best checkpoint to use
 
-**Use `data/ckpts/vidorsmall_stage1/checkpoint0001.pth`.** Stage 1 has **no validation/eval step**
-(see `CLAUDE.md`: "Stage 1 can train but has no evaluation implementation"), so there is no
-metric-based "best" checkpoint — the **final epoch is the only sensible choice**. `checkpoint.pth`
-also holds epoch 1, but the numbered per-epoch file is the canonical one to reference.
-`configs/vidorsmall_stage2.json` already sets `pretrain` to that exact path.
+**Use the final-epoch Stage-1 checkpoint, or the one with the best `stage1_dups_per_gt` if you ran
+`scripts/stage1/eval_vidorsmall.sh`.** Stage 1 now has an evaluator (see [`STAGE1.md`](STAGE1.md)
+§7.1), so this is no longer purely a "take the last epoch" decision:
+
+- If you evaluated: prefer the epoch whose `stage1_dups_per_gt` is closest to 1.0 with a rising
+  `stage1_box_ap`. Feeding stage 2 a checkpoint that emits several boxes per object propagates that
+  noise into the triplet predictions.
+- If you did not evaluate: `checkpoint.pth` (the final epoch) is the reasonable default.
+
+`configs/vidorsmall_stage2.json` sets `pretrain` to `data/ckpts/vidorsmall_stage1/checkpoint.pth`.
+That name only resolves if the stage-1 config's `output_dir` (default
+`data/ckpts/vidorsmall_stage1`) matched. **If your stage-1 run wrote somewhere else — e.g. the
+timestamped `data/ckpts/20261024/vidorsmall_stage1/` — edit `pretrain` in the stage-2 config to
+point at the right file.** The old value referenced `checkpoint0001.pth`, which does not exist for
+any run on disk.
 
 You can confirm a checkpoint's epoch (and that the Stage-1 files look right) with:
 
@@ -152,14 +163,14 @@ Notes:
 ## Stage-2 checkpoints
 
 Stage 2 saves with the same scheme under `data/ckpts/vidorsmall_stage2/`: `checkpoint.pth` plus
-`checkpoint{epoch:04}.pth` each epoch (`checkpoint0000.pth`, `checkpoint0001.pth` for 2 epochs),
-alongside `config.json` and `log.txt`. **The final epoch (`checkpoint0001.pth`, also the current
-`checkpoint.pth`) is the one to keep and evaluate.**
+`checkpoint{epoch:04}.pth` each epoch, alongside `config.json` and `log.txt`. The stage-2 config ships
+with `epochs: 2`, so a default run ends at `checkpoint0001.pth`, which is what `checkpoint.pth`
+holds. **Keep and evaluate the final-epoch checkpoint.**
 
 ## Evaluate Stage 2
 
-Stage 2 is the only stage with an evaluation path. Point the eval wrapper at a trained Stage-2
-checkpoint (edit the `--resume` path in the script, or run the command directly):
+Stage 2 has its own evaluator (stage 1's is in [`STAGE1.md`](STAGE1.md) §7.1). Point the eval wrapper
+at a trained Stage-2 checkpoint (edit the `--resume` path in the script, or run the command directly):
 
 ```bash
 source .venv/bin/activate
@@ -168,12 +179,15 @@ python -m torch.distributed.launch \
     --nproc_per_node=1 \
     main.py \
     --eval \
+    --num_queries 200 \
     --dataset_config configs/vidorsmall_stage2.json \
     --resume data/ckpts/vidorsmall_stage2/checkpoint.pth
 ```
 
-`scripts/stage2/eval_vidorsmall.sh` runs exactly this. The `--eval` path asserts `stage == 2`
-(`main.py:200-201`).
+`scripts/stage2/eval_vidorsmall.sh` runs exactly this. **`--num_queries 200` is required** — the
+checkpoints store 200-query embeddings and without it the load fails with a `query_embed.weight`
+size mismatch. (Stage-1 weights align via `resume_stage2`'s shape-halving trick, but `--resume`
+loads the model state dict strictly.)
 
 Reported metrics (`util/evaluate.py`) are printed for three settings — **overall**, **zero-shot**,
 and **generalized zero-shot**:
@@ -223,12 +237,19 @@ dataset = build_dataset('val', args)   # val dataset, one video per item
 # model.relation_classifier(memory[0], gt=targets[0]['groundtruth'], is_eval=True)
 ```
 
-For a genuinely new mp4 with no annotations, you would need to supply object tracks yourself first
-(e.g. annotate the subject/object trajectories in VidOR format), because the object-detection /
-tracking half of the pipeline that would produce those boxes from raw pixels is **not wired into an
-inference path in this repo** (Stage 1 has no eval/inference driver, and `TrackingBase.forward`
-returns nothing when `targets is None`). Plan for that annotation step before expecting triplets
-from a raw video.
+For a genuinely new mp4 with no annotations, use the single-video pipeline — it does run stage-1
+detection on raw pixels, so you do **not** need to hand-annotate tracks first:
+
+```bash
+sh scripts/inference/inference.sh stage1 clip.mp4   # detection only, annotated
+sh scripts/inference/inference.sh stage2 clip.mp4   # + triplets, annotated
+```
+
+See [`INFERENCE.md`](INFERENCE.md) for every flag and [`RUNPOD_INFERENCE.md`](RUNPOD_INFERENCE.md)
+for the setup walkthrough. Two caveats that still stand: stage 2's relation classifier is an
+*oracle* over the boxes stage 1 produced (it never enumerates its own pairs), and inference builds
+the **base** `VRDFormer`, so VRDFormer's track-query mechanism is not exercised — stage 1 decodes
+200 independent static queries per frame.
 
 ## Transfer Stage-2 checkpoints back
 

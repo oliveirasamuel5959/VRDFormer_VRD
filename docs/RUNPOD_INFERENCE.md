@@ -52,7 +52,7 @@ compiled `models/ops` extension.
 
 | Input | Path |
 | ----- | ---- |
-| Stage-1 weights | `data/ckpts/vidorsmall_stage1/checkpoint0001.pth` (final epoch; Stage 1 has no eval) |
+| Stage-1 weights | final-epoch `checkpoint.pth` from your stage-1 run; pick by `stage1_dups_per_gt` if you ran `scripts/stage1/eval_vidorsmall.sh` (see [`STAGE1.md`](STAGE1.md) §7.1) |
 | Stage-2 weights | `data/ckpts/vidorsmall_stage2/checkpoint.pth` |
 | Stage-1 config | `configs/vidorsmall_stage1.json` |
 | Stage-2 config | `configs/vidorsmall_stage2.json` |
@@ -62,6 +62,11 @@ compiled `models/ops` extension.
 Both configs are read as-is and merged over the argparse defaults (JSON wins, exactly as
 `main.py:150-155` does), because Stage 1 and Stage 2 need **different** model settings
 (`stage`, `multi_frame_attention`, `tracking`, …).
+
+**Order matters.** Inference needs a *trained* stage-1 checkpoint — stage 1 must be trained and,
+desirably, evaluated by `stage1_dups_per_gt` first (`docs/STAGE1.md` §7.1). Running inference on an
+undertrained checkpoint is what produces several near-identical boxes per person: those duplicates
+are in `results.json`, not just in the drawn video.
 
 ## Architecture
 
@@ -104,7 +109,7 @@ subdirectory (see "Output" below).
 ```bash
 python inference.py \
     --video data/vidorsmall/videos/0000000000.mp4 \
-    --stage1_ckpt data/ckpts/vidorsmall_stage1/checkpoint0001.pth \
+    --stage1_ckpt data/ckpts/vidorsmall_stage1/checkpoint.pth \
     --stage2_ckpt data/ckpts/vidorsmall_stage2/checkpoint.pth \
     --stage1_config configs/vidorsmall_stage1.json \
     --stage2_config configs/vidorsmall_stage2.json \

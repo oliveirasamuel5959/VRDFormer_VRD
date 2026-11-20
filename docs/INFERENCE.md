@@ -4,7 +4,7 @@ Reference for `inference.py` / `vrdf_inference/`: running a trained VRDFormer on
 has no annotations**, in detection-only mode or in the full triplet pipeline. Every claim carries a
 `file:line`.
 
-Companions: [`STAGE1.md`](STAGE1.md) (training + the missing stage-1 evaluation),
+Companions: [`STAGE1.md`](STAGE1.md) (training + the stage-1 `eval_stage1` metrics),
 [`STAGE2.md`](STAGE2.md) (training + the implemented metrics). The design record and the
 per-mode walkthrough live in [`RUNPOD_INFERENCE.md`](RUNPOD_INFERENCE.md); this document is the
 parameter/output/metric reference, not a setup guide.
@@ -413,7 +413,7 @@ clip — not for an arbitrary download.
 | Frame-id axis | `viou` indexes `traj[k]` as frame `duration[0] + k` (`util/compute.py:105-107`). Annotation durations count original frames; `source_duration` here is decord indices of the **input file**. They coincide only when the input **is** the original source video | `results.py:167-171` |
 | Zero-shot splits | `evaluate()` needs `dataset.zeroshot_triplets`; the sidecar carries no split information, so the caller must build or load it | `util/evaluate.py:149-158` |
 | `min_pred_num` padding | The tagging helper pads to 10 slots internally; a caller aggregating multiple videos must preserve per-video grouping | `util/evaluate.py:6-19` |
-| Stage-1 box metrics | No per-frame GT box matcher exists. It would compare `results.json.detections` (`frame_index` → `frame_ids[frame_index]`) against `annotations/<split>/<vid>.json → trajectories[source_fid]`, mapping class names through `obj.txt` | — nothing implements this |
+| Stage-1 box metrics | Per-frame GT box matching is implemented **on the training side** — `engine.eval_stage1` scores box AP@0.5, pair AP@0.5 and detections-per-GT-object over the val split. It is not wired to `results.json` from an arbitrary clip, so an unlabeled video still cannot be scored | `engine.py:eval_stage1`, `docs/STAGE1.md` §7.1 |
 | Unlabeled video | No GT exists at all; only self-consistency checks are possible | `docs/RUNPOD_INFERENCE.md:439-445` |
 
 ### 9.4 Proposed inference-side metrics
@@ -423,7 +423,7 @@ clip — not for an arbitrary download.
 | Triplet mAP@50 | `evaluate_visual_relation` detection AP, vIoU ≥ 0.5 | GT relations + the sidecar, after §9.3's coordinate/frame-id fix |
 | Triplet recall@50 / @100 | As in stage 2 (`util/evaluate.py:119-126`) | same |
 | Tagging precision@1 / @5 / @10 | Triplet-name membership only — **the one metric that works without trajectories** | GT triplets + predicted names |
-| Stage-1 pair recall@0.5 / @0.3 | Fraction of GT pairs whose boxes both clear the IoU threshold in that frame | A per-frame GT box matcher (not implemented) |
+| Stage-1 pair recall@0.5 / @0.3 | Fraction of GT pairs whose boxes both clear the IoU threshold in that frame | Implemented for the val split in `engine.eval_stage1` (`stage1_pair_ap`); not available for an arbitrary clip |
 | Stage-1 pair precision | Predicted pairs with no GT pair | same |
 | Track identity consistency | Fraction of tracklets that stay on one GT object pair | GT `subject/objects[].tid` + per-frame trajectories |
 

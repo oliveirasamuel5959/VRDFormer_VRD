@@ -62,6 +62,9 @@ def get_args_parser():
 
     # Run specific
     parser.add_argument("--eval", action="store_true", help="Only run evaluation")
+    parser.add_argument("--eval_stage1", action="store_true",
+                        help="Run the stage-1 detection evaluation (box AP@0.5, pair AP@0.5, "
+                             "duplicates per GT object) at the end of every epoch")
     parser.add_argument("--eval_mode", default="evalGT")
     parser.add_argument("--output-dir", default="", help="path where to save, empty for no saving")
     parser.add_argument("--device", default="cuda", help="device to use for training / testing")
@@ -166,6 +169,7 @@ def main(args):
 
     if args.stage ==1:
         from engine import train_stage1 as train_one_epoch
+        from engine import eval_stage1 as eval_one_epoch
     else:
         from engine import train_stage2 as train_one_epoch
         from engine import eval_stage2 as eval_one_epoch
@@ -198,7 +202,8 @@ def main(args):
     data_loader_train, sampler_train, data_loader_val = dataloader_initializer(args)
 
     if args.eval:
-        assert args.stage == 2, "Eval mode is only supported for stage 2"
+        # Stage 1 has no GT-box initialisation to lean on, so its eval runs the real
+        # decode path (eval_stage1); stage 2 evaluates its relation classifier.
         test_stats = eval_one_epoch(model, data_loader_val, device, 0, args)
         print(test_stats)
         return
@@ -233,9 +238,16 @@ def main(args):
         if args.stage == 2:
             test_stats = eval_one_epoch(model, data_loader_val, device, epoch, args)
             print(test_stats)
+        elif getattr(args, "eval_stage1", False):
+            # Off by default: a stage-1 val pass scores the whole split, which is far more
+            # expensive than an epoch of training on a small subset.
+            test_stats = eval_one_epoch(model, data_loader_val, device, epoch, args)
+            print(test_stats)
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      'epoch': epoch,
                      'n_parameters': n_parameters}
+        if args.stage == 2 or getattr(args, "eval_stage1", False):
+            log_stats.update(test_stats)
         if args.output_dir and dist.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")

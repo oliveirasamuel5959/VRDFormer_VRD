@@ -171,6 +171,7 @@ def resume_stage2(model_state_dict, checkpoint_state_dict):
 
 
 def param_initializer(args, model_without_ddp, optimizer, lr_scheduler):
+    resumed = bool(args.resume)
     if args.resume:
         print("Loading checkpoint from %s"%args.resume)
         # weights_only=False: checkpoints pickle argparse.Namespace, which
@@ -181,8 +182,15 @@ def param_initializer(args, model_without_ddp, optimizer, lr_scheduler):
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
-    
-    if args.pretrain:
+
+    if args.pretrain and resumed:
+        # --resume is the authority. The dataset configs keep "pretrain" set so a *fresh*
+        # run initialises from DETR/stage-1, but applying it after a resume would overwrite
+        # the very weights being continued or evaluated -- and because the load below is
+        # strict=False, it did so silently. Stage-2 eval on a config whose pretrain path
+        # existed was scoring stage-1-initialised weights, not the checkpoint.
+        print("Skipping pretrain (%s): --resume takes precedence" % args.pretrain)
+    elif args.pretrain:
         print("Loading pretrain weights from %s"%args.pretrain)
         if args.pretrain.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(

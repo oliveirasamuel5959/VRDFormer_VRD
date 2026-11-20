@@ -270,8 +270,8 @@ stepped, unlike stage 2 which flushes (`engine.py:132-142`).
 | Scheduler | `StepLR.step()` **once per epoch**, after training | 216 |
 | Checkpoint | `checkpoint.pth` every epoch, plus `checkpoint{epoch:04}.pth` — the `(epoch+1) % 1 == 0` condition is always true, so both are written | 218-231 |
 | Payload | `{'model', 'optimizer', 'lr_scheduler', 'epoch', 'args'}` | 225-231 |
-| Validation | **Stage 1 does none.** The per-epoch eval is guarded by `if args.stage == 2` | 233 |
-| Log | `log.txt`, one JSON line per epoch: all `train_*` meters, `epoch`, `n_parameters` | 236-241 |
+| Validation | `eval_stage1` after training each epoch **only with `--eval_stage1`**; off by default because it scores the whole val split | 238-245 |
+| Log | `log.txt`, one JSON line per epoch: all `train_*` meters, `epoch`, `n_parameters`, plus `test_*` metrics when the eval flag is on | 246-253 |
 
 ### 4.3 Loss terms
 
@@ -366,8 +366,9 @@ Filled from the resolved config written by the run itself
 
 ### 6.1 Training log from this run
 
-`data/ckpts/vidorsmall_stage1/log.txt`, one line per epoch. These are **training** losses, not
-evaluation metrics — stage 1 has no validation pass.
+`data/ckpts/vidorsmall_stage1/log.txt`, one line per epoch. These are **training** losses. This
+particular run predates `eval_stage1`, so it carries no validation line; runs with `--eval_stage1`
+append the `stage1_*` metrics from §7.1 to the same line.
 
 | Epoch | loss | loss_ce | loss_ce_verb | loss_bbox | loss_giou | sub_class_error | obj_class_error | verb_class_error |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -381,32 +382,49 @@ matched queries. It measures fit on the training set only.
 
 ## 7. Evaluation
 
-### 7.1 Status: none exists
+### 7.1 Status: implemented — `eval_stage1`
 
-Stage 1 trains but is never evaluated. Three code sites are decisive:
+Stage 1 now has an evaluator, `engine.eval_stage1`. It runs the val split through the same decode
+path as single-video inference (`vrdf_inference.stage1.decode_frame`), so the numbers describe the
+detections the pipeline actually produces rather than a second implementation of them.
 
-| Evidence | Line |
+Wire it in with either:
+
+```bash
+python main.py --eval --stage 1 --dataset_config configs/vidorsmall_stage1.json   # eval only
+python main.py ... --eval_stage1                                                  # after every epoch
+```
+
+`--eval_stage1` is off by default: scoring the whole val split is far more expensive than an epoch
+of training on a small subset.
+
+Reported in `scores` / written to `log.txt`:
+
+| Key | Definition |
 | --- | --- |
-| Only `train_stage1` is imported when `stage == 1`; `eval_one_epoch` is never bound | `main.py:167-171` |
-| `--eval` asserts `stage == 2` | `main.py:200-201` |
-| The per-epoch eval call is guarded by `if args.stage == 2` | `main.py:233` |
+| `stage1_box_ap` | AP@0.5 per object class and role, macro-averaged; greedy one-GT-once matching, `util.compute.voc_ap` |
+| `stage1_pair_ap` | Same, but a detection is correct only when **both** boxes clear IoU 0.5, grouped by `(sub_cls, obj_cls)` |
+| `stage1_dups_per_gt` | Detections matching each ground-truth object @0.5, averaged. **1.0 is ideal**; higher means several boxes on one object |
+| `stage1_num_gt_objects` | Ground-truth objects the duplicate statistic was computed over |
 
-The only eval-adjacent code inside `train_stage1` is a commented-out visualisation block
-(`engine.py:223-234`) that calls `make_results` / `postprocessors` / `vis_results` — **none of which
-exist anywhere in the repository**.
+`stage1_dups_per_gt` is the number that tracks duplicate-prediction regressions. It is the metric to
+watch when retraining: a set-prediction head only suppresses surplus queries once matched predictions
+become confident, so it falls as the head converges.
 
-The val dataset cannot be iterated either. `prepare_data_stage1` reads
-`self.train_begin_fids` (`datasets/dataset.py:203`), but that attribute is assigned **only** in the
-`image_set == "train"` branch (`datasets/dataset.py:128-139`). Verified:
+The val split is iterable under stage 1 (`datasets/dataset.py`, val branch of `prepare_data_stage1`).
+Each val video is decoded as one clip, strided down to `STAGE1_EVAL_FRAMES_PER_VIDEO` frames
+(`64`) so a video with a few thousand positive frames stays within memory; the metrics are per-frame
+averages over all videos, so the sample is representative.
 
-```
-$ ds = VidOR('vidorsmall', 'val', ..., stage=1, ...); len(ds)   # 104
-$ ds[0]
-AttributeError: 'VidOR' object has no attribute 'train_begin_fids'
-```
+Two limitations to keep in mind:
 
-Finally, `TrackingBase.tracking()` — the switch that would put the model into inference-tracking
-mode — exists (`models/vrdformer_track.py:34-38`) and is **never called**.
+- **The tracking path is still not exercised.** `TrackingBase.tracking()` exists
+  (`models/vrdformer_track.py:34-38`) but is never called, and `vrdf_inference/checkpoints.py:61`
+  forces `args.tracking = False`. Stage 1 is therefore scored as 200 independent static queries per
+  frame, with no object identity across frames.
+- **The commented-out visualisation block** inside `train_stage1` (`engine.py`, `#vis_iter_metrics`)
+  still calls `make_results` / `postprocessors` / `vis_results`, **none of which exist** in the
+  repository.
 
 ### 7.2 Proposed metrics
 
@@ -436,9 +454,10 @@ Two precision points, because they are easy to get wrong in a write-up:
 For reference, `vitou` and `voc_ap` are already load-bearing in stage 2, so a stage-1 evaluator would
 inherit tested code for the two hardest pieces.
 
-### 7.3 How to implement it
+### 7.3 Relation-level evaluation (not implemented)
 
-Design only — nothing below is implemented.
+`eval_stage1` reports box/pair AP and the duplicate statistic. The relation-level metrics below —
+which need tracklets and temporal IoU — are **still unimplemented**; this is the design for them.
 
 ```mermaid
 flowchart TD
@@ -486,17 +505,20 @@ uses at inference.
 
 ### 7.4 Results
 
-<!-- TODO: fill from your run of the evaluator described in 7.3 -->
+Run `python main.py --eval --stage 1 --dataset_config configs/vidorsmall_stage1.json` and paste the
+`stage1_*` keys here. `stage1_box_ap` and `stage1_pair_ap` macro-average over classes/roles;
+`stage1_dups_per_gt` is the duplicate statistic described in §7.1.
 
-| Setting | Box AP@50 (sub) | Box AP@50 (obj) | Pair AP@50 | Detection mAP@50 | R@50 | R@100 | Tagging P@1 | P@5 | P@10 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| overall | TODO | TODO | TODO | TODO | TODO | TODO | TODO | TODO | TODO |
-| zero-shot | — | — | — | TODO | TODO | TODO | TODO | TODO | TODO |
-| generalized zero-shot | — | — | — | TODO | TODO | TODO | TODO | TODO | TODO |
+| Checkpoint | `stage1_box_ap` | `stage1_pair_ap` | `stage1_dups_per_gt` | `stage1_num_gt_objects` |
+| --- | --- | --- | --- | --- |
+| TODO | TODO | TODO | TODO | TODO |
 
-The only stage-1 numbers in the repository today are **training** losses (§6.1) and an ad-hoc
-localisation measurement quoted in `docs/RUNPOD_INFERENCE.md:285-286` (box recall 0.41 @IoU 0.50,
-0.59 @IoU 0.30, 0.25 with the correct class) — no script reproducing it survives.
+Relation-level results (detection mAP@50, R@50/R@100, tagging P@1/@5/@10) need the relation-level
+evaluator in §7.3, which is not implemented. Do not fill those columns from `eval_stage1`.
+
+The ad-hoc localisation measurement quoted in `docs/RUNPOD_INFERENCE.md:285-286` (box recall 0.41
+@IoU 0.50, 0.59 @IoU 0.30, 0.25 with the correct class) predates `eval_stage1` and no script
+reproducing it survives; re-measure with the evaluator rather than citing it.
 
 ---
 
