@@ -12,7 +12,7 @@
 #     --dataset_config configs/vidorsmall_stage1.json
 
 export NCCL_P2P_DISABLE=1
-torchrun --standalone --nproc_per_node=4 main.py \
+torchrun --standalone --nproc_per_node=2 main.py \
     --accumulate_steps 1 \
     --lr_backbone 1e-5 \
     --lr 5e-5 \
