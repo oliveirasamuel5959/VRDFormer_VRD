@@ -40,11 +40,14 @@ docker run --gpus all \
 ### `docker eval stage 1`
 
 ```bash
+LOG="output/eval/stage1-vidorsmall-$(date +%Y%m%d-%H%M%S).log"
+set -o pipefail
 docker run --rm --gpus all \
     -v "$PWD:/app" \
     --shm-size=16g \
     -w /app \
-    vrdformer:cu128 sh scripts/stage2/eval_vidorsmall.sh
+    vrdformer:cu128 \
+    bash scripts/stage1/eval_vidorsmall.sh 2>&1 | tee "$LOG"
 ```
 
 ### `docker run stage 2`
